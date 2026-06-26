@@ -11,9 +11,14 @@ type SqlRowValue = SqlBindValue;
 
 export type SqlRow = Record<string, SqlRowValue>;
 
+const SQLITE_BUSY_TIMEOUT_MS = 15 * 60 * 1000;
+
+type DatabaseOperationScope = symbol;
+
 export class Database {
   readonly #database: SqliteDatabase;
-  readonly #operationScope = new AsyncLocalStorage<boolean>();
+  readonly #operationScope = new AsyncLocalStorage<DatabaseOperationScope>();
+  #activeTransactionScope: DatabaseOperationScope | undefined;
   #closed = false;
   #operationChain: Promise<void> = Promise.resolve();
   #transactionDepth = 0;
@@ -25,12 +30,18 @@ export class Database {
   public static async open(
     databasePath: string,
     schemaSql: string,
+    options: { readonly readonly?: boolean } = {},
   ): Promise<Database> {
     const resolvedDatabasePath = resolve(databasePath);
-    const database = await openSqliteDatabase(resolvedDatabasePath);
+    const database = await openSqliteDatabase(resolvedDatabasePath, options);
     const openedDatabase = new Database(database);
 
-    await openedDatabase.#executeSql(schemaSql);
+    await openedDatabase.#executeSql(
+      `PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`,
+    );
+    if (options.readonly !== true && schemaSql.trim() !== "") {
+      await openedDatabase.#executeSql(schemaSql);
+    }
 
     return openedDatabase;
   }
@@ -72,17 +83,21 @@ export class Database {
     return await this.#runSerialized(async () => {
       this.#assertOpen();
       const isRootTransaction = this.#transactionDepth === 0;
+      const transactionScope =
+        this.#activeTransactionScope ?? Symbol("database transaction scope");
 
       if (isRootTransaction) {
-        await this.#executeSql("BEGIN");
+        await this.#executeSql("BEGIN IMMEDIATE");
+        this.#activeTransactionScope = transactionScope;
       }
 
       this.#transactionDepth += 1;
 
       try {
-        const result = await operation();
-
-        this.#transactionDepth -= 1;
+        const result = await this.#operationScope.run(
+          transactionScope,
+          operation,
+        );
 
         if (isRootTransaction) {
           await this.#executeSql("COMMIT");
@@ -90,13 +105,16 @@ export class Database {
 
         return result;
       } catch (error) {
-        this.#transactionDepth -= 1;
-
         if (isRootTransaction) {
           await this.#executeSql("ROLLBACK");
         }
 
         throw error;
+      } finally {
+        this.#transactionDepth -= 1;
+        if (isRootTransaction) {
+          this.#activeTransactionScope = undefined;
+        }
       }
     });
   }
@@ -139,13 +157,16 @@ export class Database {
   }
 
   async #runSerialized<T>(operation: () => Promise<T> | T): Promise<T> {
-    if (this.#operationScope.getStore() === true) {
+    const operationScope = this.#operationScope.getStore();
+
+    if (
+      operationScope !== undefined &&
+      operationScope === this.#activeTransactionScope
+    ) {
       return await operation();
     }
 
-    const queuedOperation = this.#operationChain.then(() =>
-      this.#operationScope.run(true, operation),
-    );
+    const queuedOperation = this.#operationChain.then(operation);
 
     this.#operationChain = queuedOperation.then(
       () => undefined,
@@ -277,11 +298,16 @@ export function getOptionalString(
 
 async function openSqliteDatabase(
   databasePath: string,
+  options: { readonly readonly?: boolean } = {},
 ): Promise<SqliteDatabase> {
   const sqlite3 = await loadSqlite3();
+  const flags =
+    (options.readonly === true
+      ? sqlite3.OPEN_READONLY
+      : sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE) | sqlite3.OPEN_FULLMUTEX;
 
   return await new Promise<SqliteDatabase>((resolveOpen, rejectOpen) => {
-    const database = new sqlite3.Database(databasePath, (error) => {
+    const database = new sqlite3.Database(databasePath, flags, (error) => {
       if (error !== null) {
         rejectOpen(error);
         return;

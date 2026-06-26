@@ -1,9 +1,19 @@
 import { createHash, randomUUID } from "crypto";
-import { appendFile, mkdir, mkdtemp, readFile, rm } from "fs/promises";
+import { constants as fsConstants } from "fs";
+import {
+  appendFile,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+} from "fs/promises";
 import { homedir } from "os";
 import { join, resolve } from "path";
 
 import { Database } from "../document/index.js";
+import { isNodeError } from "../utils/node-error.js";
 
 export const BUILD_JOB_STATES = [
   "queued",
@@ -793,40 +803,42 @@ WHERE job_id = ? AND state = 'queued'
 }
 
 async function recoverStaleBuildJobs(state: Database): Promise<void> {
-  const jobs = await state.queryAll(
-    `
+  await state.transaction(async () => {
+    const jobs = await state.queryAll(
+      `
 SELECT *
 FROM build_jobs
 WHERE state = 'running'
   AND owner_pid IS NOT NULL
 `,
-    undefined,
-    mapBuildJob,
-  );
+      undefined,
+      mapBuildJob,
+    );
 
-  for (const job of jobs) {
-    if (job.ownerPid !== undefined && isProcessAlive(job.ownerPid)) {
-      continue;
-    }
+    for (const job of jobs) {
+      if (job.ownerPid !== undefined && isProcessAlive(job.ownerPid)) {
+        continue;
+      }
 
-    const now = Date.now();
-    await state.run(
-      `
+      const now = Date.now();
+      await state.run(
+        `
 UPDATE build_jobs
 SET state = 'queued', owner_id = NULL, owner_pid = NULL,
     current_step = NULL, updated_at = ?
 WHERE job_id = ?
 `,
-      [now, job.jobId],
-    );
-    await appendBuildJobEvent(job, {
-      at: now,
-      jobId: job.jobId,
-      seq: 0,
-      state: "queued",
-      type: "requeued",
-    });
-  }
+        [now, job.jobId],
+      );
+      await appendBuildJobEvent(job, {
+        at: now,
+        jobId: job.jobId,
+        seq: 0,
+        state: "queued",
+        type: "requeued",
+      });
+    }
+  });
 }
 
 async function acquireBuildWorkerLease(
@@ -1025,12 +1037,11 @@ async function readMinQueueRank(state: Database): Promise<number> {
 
 async function openBuildQueueDatabase(): Promise<Database> {
   const directoryPath = getBuildQueueStateDirectoryPath();
+  const databasePath = join(directoryPath, "build-queue.sqlite");
 
   await mkdir(directoryPath, { recursive: true });
-  return await Database.open(
-    join(directoryPath, "state.sqlite"),
-    BUILD_QUEUE_SCHEMA_SQL,
-  );
+  await copyLegacyStateDatabaseIfNeeded(directoryPath, databasePath);
+  return await Database.open(databasePath, BUILD_QUEUE_SCHEMA_SQL);
 }
 
 async function createJobWorkspacePath(
@@ -1062,6 +1073,58 @@ function getBuildQueueStateDirectoryPath(): string {
   }
 
   return join(homedir(), ".spinedigest", "state");
+}
+
+async function copyLegacyStateDatabaseIfNeeded(
+  directoryPath: string,
+  databasePath: string,
+): Promise<void> {
+  try {
+    if ((await stat(databasePath)).size > 0) {
+      return;
+    }
+    await rm(databasePath, { force: true });
+  } catch {
+    await rm(databasePath, { force: true });
+  }
+
+  try {
+    const legacyDatabasePath = join(directoryPath, "state.sqlite");
+
+    if (!(await legacyDatabaseHasTable(legacyDatabasePath, "build_jobs"))) {
+      return;
+    }
+
+    await copyFile(legacyDatabasePath, databasePath, fsConstants.COPYFILE_EXCL);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return;
+    }
+    if (isNodeError(error) && error.code === "EEXIST") {
+      return;
+    }
+
+    throw error;
+  }
+}
+
+async function legacyDatabaseHasTable(
+  databasePath: string,
+  tableName: string,
+): Promise<boolean> {
+  const database = await Database.open(databasePath, "");
+
+  try {
+    return (
+      (await database.queryOne(
+        "SELECT 1 AS matched FROM sqlite_master WHERE type = 'table' AND name = ?",
+        [tableName],
+        () => true,
+      )) ?? false
+    );
+  } finally {
+    await database.close();
+  }
 }
 
 function mapBuildJob(row: Record<string, unknown>): BuildJob {
