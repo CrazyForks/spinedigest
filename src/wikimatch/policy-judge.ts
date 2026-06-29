@@ -25,9 +25,8 @@ import type {
 const policyDecisionSchema = z
   .object({
     candidateId: z.string().min(1),
-    confidence: z.number().min(0).max(1).optional(),
     decision: z.enum(["continue", "recall", "skip_this_time", "never_recall"]),
-    qid: z.string().optional(),
+    qid: z.string().nullable().optional(),
   })
   .strict();
 
@@ -35,7 +34,6 @@ const policyGroupSchema = z
   .object({
     decisions: z.array(policyDecisionSchema),
     groupId: z.string().min(1),
-    note: z.string().max(24).optional(),
   })
   .strict();
 
@@ -90,19 +88,15 @@ function normalizePolicyResponse(
     groups: response.groups.map((group) => ({
       decisions: group.decisions.map((decision) => ({
         candidateId: decision.candidateId,
-        ...(decision.confidence === undefined
-          ? {}
-          : { confidence: decision.confidence }),
         decision: decision.decision,
         ...normalizeDecisionQid(decision.qid),
       })),
       groupId: group.groupId,
-      ...(group.note === undefined ? {} : { note: group.note }),
     })),
   };
 }
 
-function normalizeDecisionQid(qid: string | undefined): {
+function normalizeDecisionQid(qid: string | null | undefined): {
   readonly qid?: string;
 } {
   const normalized = qid?.trim();
@@ -135,6 +129,14 @@ export function parsePolicyResponse(
       const candidate = candidatesById.get(decision.candidateId)!;
 
       if (decision.decision === "continue") {
+        if (candidate.hasMoreOptions !== true) {
+          policyUpdates.push({
+            candidateId: candidate.id,
+            decision: "skip_this_time",
+            surface: candidate.surface,
+          });
+          continue;
+        }
         continuedCandidateIds.push(candidate.id);
         continue;
       }
@@ -142,10 +144,6 @@ export function parsePolicyResponse(
       if (decision.decision === "recall") {
         mentions.push({
           candidateId: candidate.id,
-          ...(decision.confidence === undefined
-            ? {}
-            : { confidence: decision.confidence }),
-          ...(group.note === undefined ? {} : { note: group.note }),
           qid: decision.qid!,
           range: candidate.range,
           surface: candidate.surface,
@@ -156,7 +154,6 @@ export function parsePolicyResponse(
       policyUpdates.push({
         candidateId: candidate.id,
         decision: decision.decision,
-        ...(group.note === undefined ? {} : { note: group.note }),
         ...(decision.qid === undefined ? {} : { qid: decision.qid }),
         surface: candidate.surface,
       });
@@ -247,11 +244,6 @@ export function validatePolicyResponse(
         if (decision.qid !== undefined) {
           issues.push(
             `Candidate ${candidate.id} uses decision "continue" but includes qid. Continue means this candidate page has no final choice yet.`,
-          );
-        }
-        if (candidate.hasMoreOptions !== true) {
-          issues.push(
-            `Candidate ${candidate.id} uses decision "continue", but there are no more candidate pages for "${candidate.surface}". Use recall, skip_this_time, or never_recall.`,
           );
         }
         continue;
@@ -411,10 +403,14 @@ function formatPolicySystemPrompt(input: WikimatchPolicyJudgeInput): string {
     "- Return JSON only.",
     "- Return exactly one group result for every input group.",
     "- Use decisions: [] only when this group has no selected mention and no policy update.",
+    "- First judge whether each candidate mention is worth recalling in this exact tagged context, before choosing among QID candidates.",
+    '- If the mention is not worth recalling in context, use "never_recall" immediately; do not inspect later pages just because more QIDs might exist.',
+    '- Use "never_recall" when this exact candidate span is not a standalone knowledge graph object in context.',
     "- Candidate lists may be incomplete when a candidate has more pages.",
-    '- Use decision "continue" only when the current candidate page has no good QID but more pages are available.',
+    '- Use decision "continue" only after the mention has passed the context-worthiness test and the current candidate page has no good QID but more pages are available.',
     '- "continue" is not a rejection. It asks to inspect the next candidate page for that candidate.',
     '- If a surface should be recalled but the current incomplete page lacks a suitable QID, use "continue" instead of skip_this_time.',
+    '- Do not use "continue" for single-character surnames, abbreviations, side labels, generic words, fragments, roles, quantities, attributes, or discourse words that are not useful standalone knowledge graph objects in context.',
     "- Do not invent candidates, ranges, surfaces, or QIDs.",
     "- A recalled mention must choose a QID from entityOptions or disambiguationOptions.meanings.",
     '- Include qid only when decision is "recall"; do not include qid for continue, skip_this_time, or never_recall.',
@@ -429,29 +425,25 @@ function formatPolicyPrompt(input: WikimatchPolicyJudgeInput): string {
     formatTaggedContext(input),
     "",
     "Candidate groups:",
-    JSON.stringify(formatGroupsForPrompt(input), null, 2),
+    formatGroupsForPrompt(input)
+      .map((group) => JSON.stringify(group))
+      .join("\n"),
     "",
     "Return this JSON shape:",
-    JSON.stringify(
-      {
-        groups: [
-          {
-            decisions: [
-              {
-                candidateId: "candidate id from this group",
-                confidence: 0.9,
-                decision: "recall | continue | skip_this_time | never_recall",
-                qid: "required only when decision is recall",
-              },
-            ],
-            groupId: "group id from the input",
-            note: "optional, <= 12 Chinese chars or 6 English words",
-          },
-        ],
-      },
-      null,
-      2,
-    ),
+    JSON.stringify({
+      groups: [
+        {
+          decisions: [
+            {
+              candidateId: "candidate id from this group",
+              decision: "recall | continue | skip_this_time | never_recall",
+              qid: "required only when decision is recall",
+            },
+          ],
+          groupId: "group id from the input",
+        },
+      ],
+    }),
   ].join("\n");
 }
 
@@ -494,19 +486,15 @@ function formatGroupsForPrompt(input: WikimatchPolicyJudgeInput): object[] {
 
       return candidate === undefined
         ? []
-        : [formatCandidateForPrompt(candidate, group)];
+        : [formatCandidateForPrompt(candidate)];
     }),
     groupId: group.id,
-    text: input.window.text.slice(
-      group.range.start - input.window.baseOffset,
-      group.range.end - input.window.baseOffset,
-    ),
   }));
 }
 
 export function formatCandidateForPrompt(
   candidate: WikimatchCandidate,
-  group: WikimatchConflictGroup,
+  _group?: WikimatchConflictGroup,
 ): object {
   const formattedOptions = formatQidOptions(candidate.qidOptions);
 
@@ -519,8 +507,6 @@ export function formatCandidateForPrompt(
     ...(formattedOptions.entityOptions.length === 0
       ? {}
       : { entityOptions: formattedOptions.entityOptions }),
-    offset: candidate.range.start - group.range.start,
-    surface: candidate.surface,
   };
 }
 
@@ -534,14 +520,11 @@ function formatQidOptions(options: readonly WikimatchQidOption[]): {
   for (const option of options) {
     if (option.disambiguation !== undefined) {
       disambiguationOptions.push({
-        id: `DIS${disambiguationOptions.length + 1}`,
         ...(option.label === undefined ? {} : { label: option.label }),
         meanings:
-          option.disambiguation.profile?.meanings ??
+          option.disambiguation.profile?.meanings.map(formatMeaningForPrompt) ??
           option.disambiguation.linkedQids.map((item) => ({
-            information: "",
             name: item.title,
-            priority: "other",
             qid: item.qid,
           })),
       });
@@ -560,6 +543,18 @@ function formatQidOptions(options: readonly WikimatchQidOption[]): {
   return {
     disambiguationOptions,
     entityOptions,
+  };
+}
+
+function formatMeaningForPrompt(
+  meaning: NonNullable<
+    NonNullable<WikimatchQidOption["disambiguation"]>["profile"]
+  >["meanings"][number],
+): object {
+  return {
+    ...(meaning.information === "" ? {} : { information: meaning.information }),
+    name: meaning.name,
+    qid: meaning.qid,
   };
 }
 

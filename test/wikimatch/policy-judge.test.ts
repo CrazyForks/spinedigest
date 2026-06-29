@@ -53,7 +53,6 @@ describe("wikimatch/policy-judge", () => {
                 },
               ],
               groupId: "g1",
-              note: "整体实体",
             },
             {
               decisions: [],
@@ -76,7 +75,6 @@ describe("wikimatch/policy-judge", () => {
           end: 9,
           start: 5,
         },
-        note: "整体实体",
         surface: "北京大学",
       },
     ]);
@@ -84,7 +82,6 @@ describe("wikimatch/policy-judge", () => {
       {
         candidateId: "c2",
         decision: "skip_this_time",
-        note: "整体实体",
         surface: "北京",
       },
     ]);
@@ -128,13 +125,19 @@ describe("wikimatch/policy-judge", () => {
     expect(request.mock.calls[0]?.[0][1]?.content).toContain(
       '<group id="g2">Mercury</group>',
     );
-    expect(request.mock.calls[0]?.[0][1]?.content).toContain('"id": "DIS1"');
-    expect(request.mock.calls[0]?.[0][1]?.content).toContain('"qid": "Q308"');
+    expect(request.mock.calls[0]?.[0][1]?.content).not.toContain('"id":"DIS1"');
+    expect(request.mock.calls[0]?.[0][1]?.content).toContain('"qid":"Q308"');
     expect(request.mock.calls[0]?.[0][1]?.content).not.toContain("sourceQid");
     expect(request.mock.calls[0]?.[0][1]?.content).not.toContain(
       "isDisambiguation",
     );
     expect(request.mock.calls[0]?.[0][1]?.content).not.toContain('"range"');
+    expect(request.mock.calls[0]?.[0][1]?.content).not.toContain('"offset"');
+    expect(request.mock.calls[0]?.[0][1]?.content).not.toContain('"surface"');
+    expect(request.mock.calls[0]?.[0][1]?.content).not.toContain(
+      '"confidence"',
+    );
+    expect(request.mock.calls[0]?.[0][1]?.content).not.toContain('"note"');
     expect(result).toMatchObject({
       fallback: {
         reason: "guaranteed_json_failed",
@@ -230,7 +233,45 @@ describe("wikimatch/policy-judge", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("allows continue only when the candidate page is incomplete", () => {
+  it("ignores null qid values on non-recall decisions", async () => {
+    const input = createInput();
+    const request = vi.fn<GuaranteedRequest>().mockResolvedValue(
+      JSON.stringify({
+        groups: [
+          {
+            decisions: [
+              {
+                candidateId: "c1",
+                decision: "never_recall",
+                qid: null,
+              },
+            ],
+            groupId: "g1",
+          },
+          {
+            decisions: [],
+            groupId: "g2",
+          },
+        ],
+      }),
+    );
+
+    const result = await judgeWikimatchPolicy({
+      ...input,
+      request,
+    });
+
+    expect(result.policyUpdates).toStrictEqual([
+      {
+        candidateId: "c1",
+        decision: "never_recall",
+        surface: "北京大学",
+      },
+    ]);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes continue on the last candidate page to skip this time", () => {
     const input = createInput();
 
     const result = parsePolicyResponse(
@@ -268,7 +309,8 @@ describe("wikimatch/policy-judge", () => {
         groupId: "g1",
       },
     ]);
-    expect(() =>
+
+    expect(
       parsePolicyResponse(
         [input.candidates[0]!],
         {
@@ -291,8 +333,14 @@ describe("wikimatch/policy-judge", () => {
             range: input.candidates[0]!.range,
           },
         ],
-      ),
-    ).toThrow(ParsedJsonError);
+      ).policyUpdates,
+    ).toStrictEqual([
+      {
+        candidateId: "c1",
+        decision: "skip_this_time",
+        surface: "北京大学",
+      },
+    ]);
   });
 });
 

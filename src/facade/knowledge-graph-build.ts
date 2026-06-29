@@ -89,7 +89,10 @@ const mentionLinkRecordSchema = z.object({
   note: z.string().optional(),
 });
 
-const WIKIMATCH_GROUNDING_OPTION_BUDGET = 35;
+const WIKIMATCH_GROUNDING_DEFAULT_OPTION_BUDGETS = [5, 10, 20, 35] as const;
+const WIKIMATCH_GROUNDING_PRIOR_OPTION_BUDGETS = [3, 5, 10, 20, 35] as const;
+const WIKIMATCH_GROUNDING_MAX_OPTION_BUDGET = 50;
+const WIKIMATCH_GROUNDING_SURFACE_PRIOR_THRESHOLD = 3;
 const WIKIMATCH_SURFACE_PROTECTION_PERCENTILE = 0.1;
 const WIKILINK_EVIDENCE_DISTANCE = 700;
 const WIKILINK_WINDOW_LENGTH = 1800;
@@ -178,7 +181,7 @@ export async function generateChapterKnowledgeGraphArtifact(
   await options.progressTracker?.throwIfStopped();
   await options.progressTracker?.updatePhase({
     done: 0,
-    phase: "writing",
+    phase: "relation-discovery",
     total: mentions.length,
     unit: "record",
   });
@@ -199,7 +202,7 @@ export async function generateChapterKnowledgeGraphArtifact(
   });
   await options.progressTracker?.updatePhase({
     done: mentions.length,
-    phase: "writing",
+    phase: "relation-discovery",
     total: mentions.length,
     unit: "record",
   });
@@ -354,7 +357,7 @@ export async function groundWikimatchCandidates(input: {
     const windows = buildWikimatchWindows({
       candidates: activeCandidates,
       contextWords: 220,
-      optionBudget: WIKIMATCH_GROUNDING_OPTION_BUDGET,
+      optionBudget: WIKIMATCH_GROUNDING_MAX_OPTION_BUDGET,
       text: input.text,
     });
 
@@ -399,17 +402,29 @@ export async function groundWikimatchCandidates(input: {
         candidatePages.accept(mention);
       }
       for (const update of result.policyUpdates) {
-        candidatePages.close(update.candidateId);
+        candidatePages.close(update.candidateId, update.decision);
       }
       for (const continuation of result.continuations) {
         for (const candidateId of continuation.candidateIds) {
           continuedCandidateIds.add(candidateId);
+          candidatePages.continue(candidateId);
         }
       }
     }
 
     activeCandidates = candidatePages.nextPage(continuedCandidateIds);
   }
+
+  await input.progressTracker?.updatePhase({
+    done: completedWindows,
+    phase: "grounding",
+    phaseDetail: formatGroundingEfficiency(
+      candidatePages.getStats(),
+      mentions.length,
+    ),
+    total: totalWindows,
+    unit: "window",
+  });
 
   return mentions;
 }
@@ -418,7 +433,12 @@ function createGroundingCandidatePages(
   candidates: readonly WikimatchCandidate[],
 ): {
   readonly accept: (mention: WikimatchAcceptedMention) => void;
-  readonly close: (candidateId: string) => void;
+  readonly close: (
+    candidateId: string,
+    decision?: "skip_this_time" | "never_recall",
+  ) => void;
+  readonly continue: (candidateId: string) => void;
+  readonly getStats: () => GroundingCandidatePageStats;
   readonly nextPage: (
     continuedCandidateIds?: ReadonlySet<string>,
   ) => readonly WikimatchCandidate[];
@@ -429,20 +449,47 @@ function createGroundingCandidatePages(
   const shownQidsByCandidateId = new Map(
     candidates.map((candidate) => [candidate.id, new Set<string>()]),
   );
+  const pageIndexesByCandidateId = new Map(
+    candidates.map((candidate) => [candidate.id, 0]),
+  );
   const closedCandidateIds = new Set<string>();
   const recallCounts = new Map<string, number>();
+  const surfaceStats = new Map<string, GroundingSurfaceStats>();
+  const stats: GroundingCandidatePageStats = {
+    candidatePageCount: 0,
+    qidAppearanceCount: 0,
+  };
 
   return {
     accept(mention) {
       closedCandidateIds.add(mention.candidateId);
+      getSurfaceStats(surfaceStats, mention.surface).recallCount += 1;
       recallCounts.set(
         createSurfaceQidKey(mention.surface, mention.qid),
         (recallCounts.get(createSurfaceQidKey(mention.surface, mention.qid)) ??
           0) + 1,
       );
     },
-    close(candidateId) {
+    close(candidateId, decision) {
       closedCandidateIds.add(candidateId);
+      const candidate = candidatesById.get(candidateId);
+
+      if (
+        candidate !== undefined &&
+        (decision === "skip_this_time" || decision === "never_recall")
+      ) {
+        getSurfaceStats(surfaceStats, candidate.surface).rejectCount += 1;
+      }
+    },
+    continue(candidateId) {
+      const candidate = candidatesById.get(candidateId);
+
+      if (candidate !== undefined) {
+        getSurfaceStats(surfaceStats, candidate.surface).continueCount += 1;
+      }
+    },
+    getStats() {
+      return { ...stats };
     },
     nextPage(continuedCandidateIds) {
       const pageCandidates: WikimatchCandidate[] = [];
@@ -468,9 +515,14 @@ function createGroundingCandidatePages(
           recallCounts,
         );
         const selectableQids = listCandidateSelectableQids(sortedCandidate);
+        const pageIndex = pageIndexesByCandidateId.get(candidateId) ?? 0;
+        const optionBudget = getGroundingCandidateOptionBudget(
+          getSurfaceStats(surfaceStats, candidate.surface),
+          pageIndex,
+        );
         const selectedQids = selectableQids
           .filter((qid) => !shownQids.has(qid))
-          .slice(0, WIKIMATCH_GROUNDING_OPTION_BUDGET);
+          .slice(0, optionBudget);
 
         if (selectedQids.length === 0) {
           closedCandidateIds.add(candidateId);
@@ -492,6 +544,10 @@ function createGroundingCandidatePages(
         if (!hasMoreOptions) {
           closedCandidateIds.add(candidateId);
         }
+        getSurfaceStats(surfaceStats, candidate.surface).seenCount += 1;
+        pageIndexesByCandidateId.set(candidateId, pageIndex + 1);
+        stats.candidatePageCount += 1;
+        stats.qidAppearanceCount += selectedQids.length;
         pageCandidates.push({
           ...pageCandidate,
           ...(hasMoreOptions ? { hasMoreOptions: true } : {}),
@@ -501,6 +557,74 @@ function createGroundingCandidatePages(
       return pageCandidates;
     },
   };
+}
+
+interface GroundingSurfaceStats {
+  continueCount: number;
+  recallCount: number;
+  rejectCount: number;
+  seenCount: number;
+}
+
+interface GroundingCandidatePageStats {
+  candidatePageCount: number;
+  qidAppearanceCount: number;
+}
+
+function getSurfaceStats(
+  surfaceStats: Map<string, GroundingSurfaceStats>,
+  surface: string,
+): GroundingSurfaceStats {
+  const existing = surfaceStats.get(surface);
+
+  if (existing !== undefined) {
+    return existing;
+  }
+
+  const created = {
+    continueCount: 0,
+    recallCount: 0,
+    rejectCount: 0,
+    seenCount: 0,
+  };
+  surfaceStats.set(surface, created);
+
+  return created;
+}
+
+function getGroundingCandidateOptionBudget(
+  stats: GroundingSurfaceStats,
+  pageIndex: number,
+): number {
+  const budgets = hasStrongGroundingSurfacePrior(stats)
+    ? WIKIMATCH_GROUNDING_PRIOR_OPTION_BUDGETS
+    : WIKIMATCH_GROUNDING_DEFAULT_OPTION_BUDGETS;
+
+  return budgets[Math.min(pageIndex, budgets.length - 1)]!;
+}
+
+function hasStrongGroundingSurfacePrior(stats: GroundingSurfaceStats): boolean {
+  if (stats.seenCount < WIKIMATCH_GROUNDING_SURFACE_PRIOR_THRESHOLD) {
+    return false;
+  }
+
+  return (
+    (stats.recallCount >= 2 && stats.continueCount === 0) ||
+    (stats.rejectCount >= 2 && stats.recallCount === 0) ||
+    stats.continueCount >= WIKIMATCH_GROUNDING_SURFACE_PRIOR_THRESHOLD
+  );
+}
+
+function formatGroundingEfficiency(
+  stats: GroundingCandidatePageStats,
+  mentionCount: number,
+): string {
+  const qidPerMention =
+    mentionCount === 0
+      ? "n/a"
+      : (stats.qidAppearanceCount / mentionCount).toFixed(1);
+
+  return `efficiency qid/mention=${qidPerMention} qids=${stats.qidAppearanceCount} mentions=${mentionCount} pages=${stats.candidatePageCount}`;
 }
 
 function sortCandidateOptionsByRecall(
@@ -553,17 +677,48 @@ export function createEnrichmentProgressReporter(
 ): (event: WikipageResolveProgress) => Promise<void> {
   return async (event) => {
     await progressTracker.throwIfStopped();
-    if (event.detail !== "qid") {
-      return;
-    }
+    const phase = formatEnrichmentProgressPhase(event);
 
     await progressTracker.updatePhase({
       done: event.done,
+      ...(phase.detail === undefined ? {} : { phaseDetail: phase.detail }),
       phase: "enrichment",
       total: event.total,
-      unit: "qid",
+      unit: phase.unit,
     });
   };
+}
+
+function formatEnrichmentProgressPhase(event: WikipageResolveProgress): {
+  readonly detail?: string;
+  readonly unit: "page" | "qid" | "record";
+} {
+  switch (event.detail) {
+    case "disambiguation-page":
+      return {
+        detail: "disambiguation",
+        unit: "page",
+      };
+    case "entity":
+      return {
+        detail: "entity",
+        unit: "record",
+      };
+    case "linked-page":
+      return {
+        detail: "linked",
+        unit: "page",
+      };
+    case "page":
+      return {
+        detail: "page",
+        unit: "page",
+      };
+    case "qid":
+      return {
+        unit: "qid",
+      };
+  }
 }
 
 async function discoverMentionLinks(input: {
@@ -584,7 +739,7 @@ async function discoverMentionLinks(input: {
 
   await input.progressTracker?.updatePhase({
     done: 0,
-    phase: "writing",
+    phase: "relation-discovery",
     total: fragmentWindows.length,
     unit: "window",
   });
@@ -605,7 +760,7 @@ async function discoverMentionLinks(input: {
       completedWindows += 1;
       await input.progressTracker?.updatePhase({
         done: completedWindows,
-        phase: "writing",
+        phase: "relation-discovery",
         total: fragmentWindows.length,
         unit: "window",
       });
@@ -617,7 +772,6 @@ async function discoverMentionLinks(input: {
     evidenceEnd: link.evidenceEnd,
     evidenceStart: link.evidenceStart,
     id: `l${input.fragments[0]?.serialId ?? 0}-${index + 1}`,
-    ...(link.note === undefined ? {} : { note: link.note }),
     predicate: link.predicate,
     sourceMentionId: link.sourceMentionId,
     targetMentionId: link.targetMentionId,

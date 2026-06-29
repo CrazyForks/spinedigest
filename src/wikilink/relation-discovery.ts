@@ -8,11 +8,19 @@ import {
 } from "../guaranteed/index.js";
 import type { LLMessage } from "../llm/index.js";
 import {
+  EVIDENCE_SELECTION_JSON_SHAPE,
+  EVIDENCE_SELECTION_PROMPT_FRAGMENT,
   EvidenceResolver,
-  FragmentProjection,
-} from "../reader/chunk-batch/index.js";
+  normalizeEvidenceDisplayText,
+  resolveEvidenceSelectionList,
+  type EvidenceSelectionCandidate,
+  type EvidenceSelectionList,
+  type EvidenceSelectionSentence,
+  type EvidenceResolutionFailure,
+} from "../evidence-selection/index.js";
+import { FragmentProjection } from "../reader/chunk-batch/index.js";
 
-import type { WikilinkEvidenceWindow } from "./types.js";
+import type { WikilinkEvidenceWindow, WikilinkMention } from "./types.js";
 
 export interface WikilinkSentence {
   readonly text: string;
@@ -23,7 +31,6 @@ export interface WikilinkDiscoveredRelation {
   readonly confidence?: number;
   readonly evidenceEnd: number;
   readonly evidenceStart: number;
-  readonly note?: string;
   readonly predicate: string;
   readonly sourceMentionId: string;
   readonly targetMentionId: string;
@@ -46,17 +53,28 @@ const evidenceAnchorSchema = z
     text: z.string().optional(),
   })
   .strict();
+const evidenceSelectionItemSchema = z
+  .object({
+    quote: z.string().optional(),
+    sentence_id: z.string().optional(),
+  })
+  .strict();
+const relationEvidenceSchema = z.union([
+  z
+    .object({
+      end_anchor: z.union([z.string(), evidenceAnchorSchema]).optional(),
+      quote: z.string().optional(),
+      sentence_id: z.string().optional(),
+      start_anchor: z.union([z.string(), evidenceAnchorSchema]).optional(),
+    })
+    .strict(),
+  z.array(evidenceSelectionItemSchema),
+]);
 
 const relationSchema = z
   .object({
     confidence: z.number().min(0).max(1).optional(),
-    evidence: z
-      .object({
-        end_anchor: z.union([z.string(), evidenceAnchorSchema]).optional(),
-        start_anchor: z.union([z.string(), evidenceAnchorSchema]),
-      })
-      .strict(),
-    note: z.string().max(80).optional(),
+    evidence: relationEvidenceSchema,
     predicate: z.string().min(1).max(64),
     sourceMentionId: z.string().min(1),
     targetMentionId: z.string().min(1),
@@ -68,6 +86,8 @@ const relationResponseSchema = z
     relations: z.array(relationSchema),
   })
   .strict();
+
+type RelationEvidenceData = z.infer<typeof relationEvidenceSchema>;
 
 const SUGGESTED_PREDICATES = [
   "instance_of",
@@ -183,6 +203,26 @@ function parseRelationResponse(
     })),
   );
   const sentenceOffsets = buildSentenceOffsets(options.sentences);
+  const evidenceSentences = projection.sentences.flatMap(
+    (sentence, sentenceIndex) => {
+      const offset = sentenceOffsets[sentenceIndex];
+
+      if (
+        offset === undefined ||
+        !rangesOverlap(offset, options.window.range)
+      ) {
+        return [];
+      }
+
+      return [
+        {
+          id: `S${sentenceIndex + 1}`,
+          sentenceId: sentence.sentenceId,
+          text: sentence.projectedText,
+        },
+      ];
+    },
+  );
   const issues: string[] = [];
   const links: WikilinkDiscoveredRelation[] = [];
   const seenKeys = new Set<string>();
@@ -204,10 +244,6 @@ function parseRelationResponse(
       issues.push(`${prefix} links a mention to itself.`);
       continue;
     }
-    if (source.qid !== undefined && source.qid === target.qid) {
-      issues.push(`${prefix} links two mentions grounded to the same QID.`);
-      continue;
-    }
 
     const predicate = normalizePredicate(relation.predicate);
 
@@ -223,31 +259,46 @@ function parseRelationResponse(
       continue;
     }
 
-    const [resolution, failure] = resolver.resolve(
-      relation.evidence,
-      projection.sentences.map((sentence) => sentence.sentenceId),
-      projection.sentences.map((sentence) => sentence.projectedText),
+    const sentenceIds = evidenceSentences.map(
+      (sentence) => sentence.sentenceId,
     );
+    const sentenceTexts = evidenceSentences.map((sentence) => sentence.text);
+    const [selectionResolution, selectionFailure] = resolveRelationEvidence({
+      evidence: createRelationEvidenceSelection(relation.evidence),
+      sentences: evidenceSentences,
+    });
+    const [anchorResolution, anchorFailure] =
+      !Array.isArray(relation.evidence) &&
+      selectionResolution === undefined &&
+      selectionFailure === undefined
+        ? resolver.resolve(relation.evidence, sentenceIds, sentenceTexts)
+        : [undefined, undefined];
+    const effectiveResolution = selectionResolution ?? anchorResolution;
+    const effectiveFailure =
+      selectionFailure === undefined
+        ? anchorFailure
+        : toEvidenceResolutionFailure(selectionFailure);
 
-    if (resolution === undefined) {
+    if (effectiveResolution === undefined) {
       issues.push(
         `${prefix}.evidence could not be resolved: ${
-          failure?.message ?? "unknown failure"
+          effectiveFailure?.message ?? "unknown failure"
         }`,
       );
       continue;
     }
 
-    const firstSentence = resolution.sentenceIds[0];
-    const lastSentence = resolution.sentenceIds.at(-1);
+    const resolvedIndexes = effectiveResolution.sentenceIds.map(
+      (sentenceId) => sentenceId[2],
+    );
 
-    if (firstSentence === undefined || lastSentence === undefined) {
+    if (resolvedIndexes.length === 0) {
       issues.push(`${prefix}.evidence resolved to no sentences.`);
       continue;
     }
 
-    const startIndex = firstSentence[2];
-    const endIndex = lastSentence[2];
+    const startIndex = Math.min(...resolvedIndexes);
+    const endIndex = Math.max(...resolvedIndexes);
     const startOffset = sentenceOffsets[startIndex]?.start;
     const endOffset = sentenceOffsets[endIndex]?.end;
 
@@ -269,7 +320,6 @@ function parseRelationResponse(
         : { confidence: relation.confidence }),
       evidenceEnd: endOffset,
       evidenceStart: startOffset,
-      ...(relation.note === undefined ? {} : { note: relation.note }),
       predicate,
       sourceMentionId: source.id,
       targetMentionId: target.id,
@@ -305,14 +355,15 @@ function formatRelationSystemPrompt(): string {
     "Rules:",
     "- Return JSON only.",
     "- Return only relations that are directly supported by the source text.",
-    "- Every relation must connect two provided mention IDs from this window.",
+    '- Every relation must connect two mention IDs from the <mention id="..." qid="..."> tags.',
+    "- sourceMentionId and targetMentionId must be different mention IDs; never link a mention to itself.",
     "- Do not create a relation just because two mentions are nearby.",
     "- Prefer the suggested predicates when one fits.",
     "- If none fits, create one short snake_case predicate.",
     "- Never use mentions as a predicate.",
-    "- Evidence must quote exact original-language source text with start_anchor.",
-    "- Use end_anchor only when evidence spans multiple consecutive sentences.",
-    "- Do not use sentence numbers, offsets, or invented paraphrases as evidence.",
+    EVIDENCE_SELECTION_PROMPT_FRAGMENT,
+    "- Source sentences may contain XML-like mention tags. Use those tags for mention IDs, but ignore the tags when copying evidence quote text.",
+    "- Do not use offsets or invented paraphrases as evidence.",
     "",
     "Suggested predicates:",
     SUGGESTED_PREDICATES.join(", "),
@@ -323,19 +374,8 @@ function formatRelationUserPrompt(
   input: DiscoverWikilinkRelationsOptions,
 ): string {
   return [
-    "Tagged source context:",
-    formatTaggedContext(input.window),
-    "",
-    "Mentions:",
-    JSON.stringify(
-      input.window.mentions.map((mention) => ({
-        id: mention.id,
-        qid: mention.qid,
-        surface: mention.surface,
-      })),
-      null,
-      2,
-    ),
+    "Source sentences with mention tags:",
+    formatTaggedEvidenceSentences(input),
     "",
     "Return this JSON shape:",
     JSON.stringify(
@@ -343,13 +383,7 @@ function formatRelationUserPrompt(
         relations: [
           {
             confidence: 0.86,
-            evidence: {
-              start_anchor: {
-                mode: "full",
-                text: "exact original source quote",
-              },
-            },
-            note: "optional short reason",
+            evidence: EVIDENCE_SELECTION_JSON_SHAPE,
             predicate: "predicate_name",
             sourceMentionId: "source mention id",
             targetMentionId: "target mention id",
@@ -363,6 +397,168 @@ function formatRelationUserPrompt(
     "If the source text does not support any semantic relation, return:",
     JSON.stringify({ relations: [] }),
   ].join("\n");
+}
+
+function formatTaggedEvidenceSentences(
+  input: DiscoverWikilinkRelationsOptions,
+): string {
+  const sourceOffsets = buildSentenceOffsets(input.sentences);
+  const lines = input.sentences.flatMap((sentence, index) => {
+    const offset = sourceOffsets[index];
+
+    if (offset === undefined || !rangesOverlap(offset, input.window.range)) {
+      return [];
+    }
+
+    return [
+      `S${index + 1}: ${normalizeEvidenceDisplayText(
+        formatTaggedSentence({
+          mentions: input.window.mentions,
+          sentence,
+          sentenceOffset: offset,
+        }),
+      )}`,
+    ];
+  });
+
+  return lines.length === 0
+    ? formatTaggedContext(input.window)
+    : lines.join("\n");
+}
+
+function formatTaggedSentence(input: {
+  readonly mentions: readonly WikilinkMention[];
+  readonly sentence: WikilinkSentence;
+  readonly sentenceOffset: { readonly end: number; readonly start: number };
+}): string {
+  const mentions = input.mentions
+    .filter(
+      (mention) =>
+        mention.range.start >= input.sentenceOffset.start &&
+        mention.range.end <= input.sentenceOffset.end,
+    )
+    .sort((left, right) => left.range.start - right.range.start);
+  const parts: string[] = [];
+  let cursor = input.sentenceOffset.start;
+
+  for (const mention of mentions) {
+    parts.push(
+      escapeXmlText(
+        input.sentence.text.slice(
+          cursor - input.sentenceOffset.start,
+          mention.range.start - input.sentenceOffset.start,
+        ),
+      ),
+    );
+    parts.push(
+      `<mention id="${escapeXmlAttribute(mention.id)}" qid="${escapeXmlAttribute(
+        mention.qid ?? "",
+      )}">${escapeXmlText(
+        input.sentence.text.slice(
+          mention.range.start - input.sentenceOffset.start,
+          mention.range.end - input.sentenceOffset.start,
+        ),
+      )}</mention>`,
+    );
+    cursor = mention.range.end;
+  }
+
+  parts.push(
+    escapeXmlText(
+      input.sentence.text.slice(cursor - input.sentenceOffset.start),
+    ),
+  );
+
+  return parts.join("");
+}
+
+function rangesOverlap(
+  left: { readonly end: number; readonly start: number },
+  right: { readonly end: number; readonly start: number },
+): boolean {
+  return left.start < right.end && right.start < left.end;
+}
+
+function resolveRelationEvidence(input: {
+  readonly evidence: EvidenceSelectionList | undefined;
+  readonly sentences: readonly EvidenceSelectionSentence[];
+}): readonly [
+  resolution:
+    | {
+        readonly sentenceIds: readonly (readonly [number, number, number])[];
+      }
+    | undefined,
+  failure:
+    | {
+        readonly candidates: readonly EvidenceSelectionCandidate[];
+        readonly code: string;
+        readonly message: string;
+      }
+    | undefined,
+] {
+  if (input.evidence === undefined) {
+    return [undefined, undefined];
+  }
+
+  return resolveEvidenceSelectionList({
+    evidence: input.evidence,
+    sentences: input.sentences,
+  });
+}
+
+function createRelationEvidenceSelection(
+  evidence: RelationEvidenceData,
+): EvidenceSelectionList | undefined {
+  if (Array.isArray(evidence)) {
+    return evidence.map(createRelationEvidenceSelectionItem);
+  }
+
+  const hasSelectionEvidence =
+    typeof evidence.quote === "string" ||
+    typeof evidence.sentence_id === "string";
+
+  return hasSelectionEvidence
+    ? createRelationEvidenceSelectionItem(evidence)
+    : undefined;
+}
+
+function createRelationEvidenceSelectionItem(evidence: {
+  readonly quote?: unknown;
+  readonly sentence_id?: unknown;
+}): {
+  readonly quote?: string;
+  readonly sentence_id?: string;
+} {
+  return {
+    ...(typeof evidence.quote === "string" ? { quote: evidence.quote } : {}),
+    ...(typeof evidence.sentence_id === "string"
+      ? { sentence_id: evidence.sentence_id }
+      : {}),
+  };
+}
+
+function toEvidenceResolutionFailure(failure: {
+  readonly candidates: readonly EvidenceSelectionCandidate[];
+  readonly code: string;
+  readonly message: string;
+}): EvidenceResolutionFailure {
+  return {
+    candidates: failure.candidates.map((candidate) => ({
+      exactNormalized: candidate.exactNormalized,
+      exactRaw: candidate.exactRaw,
+      exactSubstring: candidate.exactSubstring,
+      index: candidate.index,
+      nextText: candidate.nextText,
+      occurrenceId: candidate.occurrenceId,
+      prevText: candidate.prevText,
+      score: candidate.score,
+      sentenceId: candidate.sentence.sentenceId,
+      text: candidate.sentence.text,
+    })),
+    code: failure.code,
+    fieldName: "evidence",
+    message: failure.message,
+  };
 }
 
 function formatTaggedContext(window: WikilinkEvidenceWindow): string {

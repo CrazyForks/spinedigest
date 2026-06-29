@@ -10,6 +10,26 @@ export {
 } from "./context/index.js";
 export { LLMPaymentRequiredError } from "./llm/index.js";
 export {
+  EVIDENCE_SELECTION_JSON_SHAPE,
+  EVIDENCE_SELECTION_PROMPT_FRAGMENT,
+  formatEvidenceSelectionChoicePrompt,
+  normalizeEvidenceDisplayText,
+  normalizeEvidenceText,
+  rankEvidenceQuote,
+  resolveEvidenceSelection,
+  resolveEvidenceSelectionList,
+  scoreEvidenceQuote,
+  type EvidenceQuoteMatchStrategy,
+  type EvidenceQuoteScore,
+  type EvidenceSelection,
+  type EvidenceSelectionCandidate,
+  type EvidenceSelectionFailure,
+  type EvidenceSelectionList,
+  type EvidenceSelectionResolution,
+  type EvidenceSelectionSentence,
+  type EvidenceSentenceId,
+} from "./evidence-selection/index.js";
+export {
   RateLimiter,
   parseRetryAfterMs,
   WikimediaClient,

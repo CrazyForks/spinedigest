@@ -42,7 +42,8 @@ describe("reader/chunk-batch/extractor", () => {
           {
             content: "Alpha summary",
             evidence: {
-              start_anchor: "Alpha begins.",
+              quote: "Alpha begins",
+              sentence_id: "S1",
             },
             label: "Alpha label",
             retention: "focused",
@@ -102,9 +103,59 @@ describe("reader/chunk-batch/extractor", () => {
     expect(llm.prompts.map((prompt) => prompt.templateName)).toContain(
       EVIDENCE_CHOICE_PROMPT_TEMPLATE,
     );
+    expect(
+      llm.prompts.find(
+        (prompt) => prompt.templateName === USER_FOCUSED_PROMPT_TEMPLATE,
+      )?.templateContext.evidence_selection_prompt,
+    ).toContain('[{"sentence_id":"S1","quote":"exact short source quote"}]');
     expect(llm.calls).toHaveLength(1);
+    expect(llm.calls[0]?.messages[1]?.content).toBe("S1: Alpha begins.");
     expect(llm.calls[0]?.options.scope).toBe(SpineDigestScope.ReaderExtraction);
     expect(llm.calls[0]?.viaContext).toBe(true);
+  });
+
+  it("normalizes source sentences for evidence selection prompts", async () => {
+    const llm = new ScriptedLLM<SpineDigestScope>([
+      JSON.stringify({
+        chunks: [
+          {
+            content: "Alpha summary",
+            evidence: {
+              quote: "Alpha Beta C++!",
+              sentence_id: "S1",
+            },
+            label: "Alpha label",
+            retention: "focused",
+            temp_id: "temp-1",
+          },
+        ],
+        fragment_summary: "Fragment summary",
+        links: [],
+      }),
+    ]);
+    const extractor = new ChunkExtractor<SpineDigestScope>({
+      extractionGuidance: "Focus on plot",
+      llm: llm as never,
+      scopes: SPINE_DIGEST_READER_SCOPES,
+      sentenceTextSource: {
+        getSentence: (sentenceId) => Promise.resolve(sentenceId.join(":")),
+      },
+    });
+
+    await extractor.extractUserFocused({
+      sentences: [
+        {
+          sentenceId: [1, 0, 0],
+          text: "Alpha\n\tBeta\u200b  C++！",
+          wordsCount: 4,
+        },
+      ],
+      text: "Alpha\n\tBeta\u200b  C++！",
+      visibleChunkIds: [],
+      workingMemoryPrompt: "memory",
+    });
+
+    expect(llm.calls[0]?.messages[1]?.content).toBe("S1: Alpha Beta C++!");
   });
 
   it("extracts book-coherence chunks with valid importance annotations", async () => {
@@ -114,7 +165,8 @@ describe("reader/chunk-batch/extractor", () => {
           {
             content: "Bridge summary",
             evidence: {
-              start_anchor: "Bridge sentence.",
+              quote: "Bridge sentence",
+              sentence_id: "S1",
             },
             importance: "important",
             label: "Bridge label",
@@ -193,6 +245,79 @@ describe("reader/chunk-batch/extractor", () => {
     );
     expect(llm.calls).toHaveLength(1);
     expect(llm.calls[0]?.viaContext).toBe(true);
+  });
+
+  it("allows book-coherence links to current user-focused chunks", async () => {
+    const llm = new ScriptedLLM<SpineDigestScope>([
+      JSON.stringify({
+        chunks: [
+          {
+            content: "Bridge summary",
+            evidence: {
+              quote: "Bridge sentence",
+              sentence_id: "S1",
+            },
+            importance: "important",
+            label: "Bridge label",
+            temp_id: "temp-1",
+          },
+        ],
+        importance_annotations: [
+          {
+            chunk_id: 9,
+            importance: "critical",
+          },
+        ],
+        links: [
+          {
+            from: 9,
+            strength: "important",
+            to: "temp-1",
+          },
+        ],
+      }),
+    ]);
+    const extractor = new ChunkExtractor<SpineDigestScope>({
+      extractionGuidance: "Focus on plot",
+      llm: llm as never,
+      scopes: SPINE_DIGEST_READER_SCOPES,
+      sentenceTextSource: {
+        getSentence: (sentenceId) => Promise.resolve(sentenceId.join(":")),
+      },
+    });
+
+    const result = await extractor.extractBookCoherence({
+      sentences: [
+        {
+          sentenceId: [1, 0, 0],
+          text: "Bridge sentence.",
+          wordsCount: 3,
+        },
+      ],
+      text: "Bridge sentence.",
+      userFocusedChunks: [
+        {
+          content: "Existing clue",
+          generation: 0,
+          id: 9,
+          label: "Existing label",
+          links: [],
+          sentenceId: [1, 0, 0],
+          sentenceIds: [[1, 0, 0]],
+          wordsCount: 2,
+        },
+      ],
+      visibleChunkIds: [9],
+      workingMemoryPrompt: "(empty)",
+    });
+
+    expect(result.links).toStrictEqual([
+      {
+        from: 9,
+        strength: "important",
+        to: "temp-1",
+      },
+    ]);
   });
 
   it("returns an empty chunk batch when parse validation keeps failing", async () => {
@@ -525,7 +650,7 @@ describe("reader/chunk-batch/extractor", () => {
     });
 
     expect(llm.calls[0]?.messages[1]).toMatchObject({
-      content: "He said ＂hi＂ and saved to ＼tmp＼log.",
+      content: "S1: He said ＂hi＂ and saved to ＼tmp＼log.",
       role: "user",
     });
     expect(result.chunkBatch.chunks[0]).toMatchObject({
