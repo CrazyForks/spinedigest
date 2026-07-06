@@ -29,11 +29,11 @@ import type {
   SnakeEdgeRecord,
   SnakeRecord,
 } from "../document/index.js";
-import { DirectoryDocument } from "../document/index.js";
+import { DirectoryDocument, Fragments } from "../document/index.js";
 import { SPINE_DIGEST_EDITOR_SCOPES } from "../common/llm-scope.js";
 import { normalizeLanguageCode } from "../common/language.js";
 import { compressText } from "../editor/index.js";
-import type { ReaderTextStream } from "../reader/index.js";
+import { segmentTextStream, type ReaderTextStream } from "../reader/index.js";
 import {
   SerialGeneration,
   type BuildSerialTopologyOptions,
@@ -77,6 +77,7 @@ const sentenceIdSchema = z.tuple([
   z.number(),
   z.number(),
 ]) satisfies z.ZodType<SentenceId>;
+const GRAPH_ARTIFACT_FRAGMENT_WORDS_COUNT = 320;
 const sentenceRecordSchema = z.object({
   text: z.string(),
   wordsCount: z.number(),
@@ -89,6 +90,7 @@ const fragmentRecordSchema = z.object({
 }) satisfies z.ZodType<FragmentRecord>;
 const serialRecordSchema = z
   .object({
+    documentOrder: z.number().optional(),
     id: z.number(),
     knowledgeGraphReady: z.boolean(),
     knowledgeGraphParameterHash: z.string().optional(),
@@ -97,6 +99,7 @@ const serialRecordSchema = z
     topologyReady: z.boolean(),
   })
   .transform((record) => ({
+    documentOrder: record.documentOrder ?? record.id,
     id: record.id,
     knowledgeGraphReady: record.knowledgeGraphReady,
     ...(record.knowledgeGraphParameterHash === undefined
@@ -207,15 +210,24 @@ export async function buildChapterGraphArtifact(
   try {
     await document.openSession(async (openedDocument) => {
       await openedDocument.serials.createWithId(chapterId);
+      await writeGraphArtifactSourceFragments(
+        documentPath,
+        chapterId,
+        options.sourceText,
+      );
+      const artifactDocument = createFragmentBackedDocument(
+        openedDocument,
+        documentPath,
+      );
+
       await new SerialGeneration({
-        document: openedDocument,
+        document: artifactDocument,
         llm: options.llm,
         ...(options.logDirPath === undefined
           ? {}
           : { logDirPath: options.logDirPath }),
       }).buildTopologyInto(
         chapterId,
-        options.sourceText,
         createTopologyOptions(options),
         options.progressTracker,
       );
@@ -240,13 +252,8 @@ export async function commitChapterGraphArtifact(
   try {
     await document.openSession(async (openedDocument) => {
       await requireStage(openedDocument, artifact.chapterId, "sourced");
-      await openedDocument.clearSerialSource(artifact.chapterId);
+      await openedDocument.clearSerialGraph(artifact.chapterId);
       await openedDocument.serials.ensure(artifact.chapterId);
-      await copySerialFragments(
-        sourceDocument,
-        openedDocument,
-        artifact.chapterId,
-      );
 
       const chunkIdMap = await copyChunks(
         sourceDocument,
@@ -346,7 +353,7 @@ async function buildChapterSummaryArtifactFromDocumentSnapshot(
 
   try {
     return await buildChapterSummaryArtifactFromDocument(
-      document,
+      createFragmentBackedDocument(document, options.sourceDocumentPath),
       chapterId,
       options,
     );
@@ -416,6 +423,7 @@ export async function snapshotChapterSummaryInput(
     fragments,
     readingEdges: await document.readingEdges.listBySerial(chapterId),
     serial: {
+      documentOrder: chapterId,
       id: chapterId,
       knowledgeGraphReady: false,
       revision: 0,
@@ -557,24 +565,75 @@ async function readPassthroughSummary(
     .trim();
 }
 
-async function copySerialFragments(
-  sourceDocument: ReadonlyDocument,
-  targetDocument: Document,
-  serialId: number,
+async function writeGraphArtifactSourceFragments(
+  documentPath: string,
+  chapterId: number,
+  sourceText: ReaderTextStream,
 ): Promise<void> {
-  const sourceFragments = sourceDocument.getSerialFragments(serialId);
-  const targetFragments = targetDocument.getSerialFragments(serialId);
+  const fragments = new Fragments(documentPath);
+  const serial = fragments.getSerial(chapterId);
+  let draft = await serial.createDraft();
+  let draftWordsCount = 0;
+  let hasSentences = false;
 
-  for (const fragmentId of await sourceFragments.listFragmentIds()) {
-    const fragment = await sourceFragments.getFragment(fragmentId);
-    const draft = await targetFragments.createDraft();
+  await fragments.ensureCreated();
 
-    for (const sentence of fragment.sentences) {
-      draft.addSentence(sentence.text, sentence.wordsCount);
+  for await (const sentence of segmentTextStream(sourceText)) {
+    const text = sentence.text.trim();
+
+    if (text === "") {
+      continue;
     }
-    draft.setSummary(fragment.summary);
-    await draft.commit();
+    if (
+      draftWordsCount > 0 &&
+      draftWordsCount + sentence.wordsCount >
+        GRAPH_ARTIFACT_FRAGMENT_WORDS_COUNT
+    ) {
+      await draft.commit();
+      draft = await serial.createDraft();
+      draftWordsCount = 0;
+    }
+
+    draft.addSentence(text, sentence.wordsCount);
+    draftWordsCount += sentence.wordsCount;
+    hasSentences = true;
   }
+
+  if (hasSentences) {
+    await draft.commit();
+  } else {
+    draft.discard();
+  }
+}
+
+function createFragmentBackedDocument<TDocument extends ReadonlyDocument>(
+  document: TDocument,
+  documentPath: string,
+): TDocument {
+  const fragments = new Fragments(documentPath);
+
+  return new Proxy(document, {
+    get(target, property, receiver): unknown {
+      if (property === "getSerialFragments") {
+        return (serialId: number) => fragments.getSerial(serialId);
+      }
+      if (property === "getSummaryFragments") {
+        return (serialId: number) => fragments.getSummarySerial(serialId);
+      }
+      if (property === "getSentence") {
+        return async (sentenceId: SentenceId) =>
+          await fragments.getSentence(sentenceId);
+      }
+
+      const value = Reflect.get(target, property, receiver) as unknown;
+
+      if (typeof value !== "function") {
+        return value;
+      }
+
+      return value.bind(target) as unknown;
+    },
+  });
 }
 
 async function readSerialFragments(
@@ -846,6 +905,12 @@ class SnapshotSerialStore implements ReadonlySerialStore {
 
   public listIds(): Promise<number[]> {
     return Promise.resolve([this.#serial.id]);
+  }
+
+  public listDocumentOrders(): Promise<ReadonlyMap<number, number>> {
+    return Promise.resolve(
+      new Map([[this.#serial.id, this.#serial.documentOrder]]),
+    );
   }
 }
 

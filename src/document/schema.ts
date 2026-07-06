@@ -2,7 +2,8 @@ import type { Database } from "./database.js";
 
 export const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS serials (
-    id INTEGER PRIMARY KEY
+    id INTEGER PRIMARY KEY,
+    document_order INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS serial_states (
@@ -342,11 +343,43 @@ export const SEARCH_INDEX_SCHEMA_SQL = `
 export async function initializeDocumentSchema(
   database: Database,
 ): Promise<void> {
+  await migrateSerialDocumentOrder(database);
   await ensureGraphBuildParameterTable(database);
   await migrateSerialStateRevision(database);
   await migrateSerialStateKnowledgeGraphReady(database);
   await migrateSerialStateGraphParameterHashes(database);
+  await ensureSerialDocumentOrderIndex(database);
   await ensureGraphBuildParameterIndexes(database);
+}
+
+async function migrateSerialDocumentOrder(database: Database): Promise<void> {
+  const columns = await listTableColumns(database, "serials");
+
+  if (columns.has("document_order")) {
+    return;
+  }
+
+  await database.transaction(async () => {
+    const transactionColumns = await listTableColumns(database, "serials");
+
+    if (transactionColumns.has("document_order")) {
+      return;
+    }
+
+    await database.run(`
+      ALTER TABLE serials
+      ADD COLUMN document_order INTEGER NOT NULL DEFAULT 0
+    `);
+  });
+}
+
+async function ensureSerialDocumentOrderIndex(
+  database: Database,
+): Promise<void> {
+  await database.run(`
+    CREATE INDEX IF NOT EXISTS idx_serials_document_order
+    ON serials(document_order, id)
+  `);
 }
 
 async function migrateSerialStateRevision(database: Database): Promise<void> {

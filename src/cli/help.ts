@@ -3,6 +3,7 @@ import { createEnv } from "../common/template.js";
 
 import { CLI_FORMATS } from "./formats.js";
 import { CLI_HELP_ROUTES, withHelpRoute } from "./errors.js";
+import { formatShellCommand } from "./shell.js";
 import type {
   CLIArchiveAction,
   CLIArchiveChapterAction,
@@ -47,13 +48,14 @@ export type UriHelpTargetName =
 export type UriHelpPredicateName =
   | "add"
   | "boost"
-  | "build"
   | "cancel"
   | "clear"
   | "clean"
   | "create"
   | "delete"
+  | "disable"
   | "embed"
+  | "enable"
   | "evidence"
   | "export"
   | "external"
@@ -99,7 +101,10 @@ const URI_HELP_TARGETS: readonly UriHelpTarget[] = [
   },
   { name: "entity-object", predicates: ["evidence", "pack", "related"] },
   { name: "entity-wikipage-object", predicates: [] },
-  { name: "index-object", predicates: ["build", "clear", "embed", "external"] },
+  {
+    name: "index-object",
+    predicates: ["enable", "disable", "embed", "external"],
+  },
   {
     name: "job-collection-scope",
     predicates: ["add", "clean"],
@@ -247,7 +252,7 @@ export function renderUriPredicateHelpText(
     throw new Error(
       withHelpRoute(
         `The URI target ${uri} does not support \`${predicate}\`.`,
-        `wikigraph ${uri} --help`,
+        formatShellCommand(["wikigraph", uri, "--help"]),
       ),
     );
   }

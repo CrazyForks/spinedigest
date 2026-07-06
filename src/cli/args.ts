@@ -26,6 +26,7 @@ import {
   parseLocalConfigSection,
   type LocalConfigSection,
 } from "./local-config-store.js";
+import { formatShellCommand } from "./shell.js";
 import {
   formatLocatedChapterResourceUri,
   formatLocatedChapterSourceCollectionUri,
@@ -213,9 +214,9 @@ export type CLIArchiveAction =
 
 export type CLIArchiveMaintenanceCommand = "chapter" | "cover" | "meta";
 export type CLIArchiveIndexAction =
-  | "build"
-  | "clear"
+  | "disable"
   | "embed"
+  | "enable"
   | "external"
   | "get";
 type CLIArchiveRootAction = CLIArchiveAction;
@@ -267,6 +268,7 @@ export interface CLIArchiveArguments {
   readonly prompt?: string;
   readonly query?: string;
   readonly replace?: boolean;
+  readonly reverse?: boolean;
   readonly role?: "any" | "object" | "self" | "subject";
   readonly sourcePath?: string;
   readonly triplePattern?: ArchiveTriplePattern;
@@ -331,6 +333,7 @@ interface ArchiveArgumentValues extends ArchiveMetaFlagValues {
   readonly prompt?: string;
   readonly query?: string;
   readonly replace?: boolean;
+  readonly reverse?: boolean;
   readonly role?: string;
   readonly root?: boolean;
   readonly secret?: boolean;
@@ -547,6 +550,9 @@ export function parseCLIArguments(
       replace: {
         type: "boolean",
       },
+      reverse: {
+        type: "boolean",
+      },
       stage: {
         type: "string",
       },
@@ -639,6 +645,14 @@ export function parseCLIArguments(
     );
   }
 
+  if (
+    values.reverse === true &&
+    (positionals[0] === undefined ||
+      (!isWikiGraphUri(positionals[0]) && positionals[0] !== "next"))
+  ) {
+    throw new Error("The current command does not support --reverse.");
+  }
+
   if (positionals[0] === "help") {
     return parseHelpArguments(positionals.slice(1), values);
   }
@@ -676,10 +690,22 @@ export function parseCLIArguments(
   }
 
   if (isWikiGraphJobUri(positionals[0])) {
+    rejectArchiveBooleanFlag(
+      positionals[1] ?? "job",
+      "--reverse",
+      values.reverse,
+      "wikigraph wikg://local/job --help",
+    );
     return parseJobUriFirstArguments(positionals, values);
   }
 
   if (isWikiGraphLocalConfigUri(positionals[0])) {
+    rejectArchiveBooleanFlag(
+      positionals[1] ?? "config",
+      "--reverse",
+      values.reverse,
+      "wikigraph wikg://local/config --help",
+    );
     return parseLocalConfigUriFirstArguments(positionals, values);
   }
 
@@ -733,7 +759,7 @@ function parseArchiveUriFirstArguments(
       throw new Error(
         withHelpRoute(
           `The URI target ${uri} does not support \`${explicitAction}\`.`,
-          `wikigraph ${uri} --help`,
+          formatWikiGraphHelpCommand(uri),
         ),
       );
     }
@@ -745,10 +771,12 @@ function parseArchiveUriFirstArguments(
   }
 
   if (!isArchiveUriAction(action)) {
+    const helpCommand = formatWikiGraphHelpCommand(uri);
+
     throw new Error(
       withHelpRoute(
-        `The URI-first form does not support \`${action}\`. Use \`wikigraph ${uri} --help\` to inspect valid predicates.`,
-        `wikigraph ${uri} --help`,
+        `The URI-first form does not support \`${action}\`. Use \`${helpCommand}\` to inspect valid predicates.`,
+        helpCommand,
       ),
     );
   }
@@ -887,11 +915,12 @@ function parseArchiveUriTargetArguments(
   const parsed = parseLocatedWikiGraphUri(uri);
   const archivePath = parsed.archivePath;
   const objectUri = parsed.objectUri;
-  const helpRoute = `wikigraph ${uri} ${action} --help`;
+  const helpRoute = formatWikiGraphHelpCommand(uri, action);
 
   if (archivePath === undefined) {
     throw new Error(formatMissingArchiveLocatorMessage(uri));
   }
+  rejectUnsupportedArchiveReverse(action, values.reverse, helpRoute);
 
   if (objectUri === undefined) {
     return parseArchiveUriArchiveArguments(
@@ -970,15 +999,42 @@ function parseArchiveUriTargetArguments(
   }
 
   if (!isUriFirstArchiveAction(action)) {
+    const helpCommand = formatWikiGraphHelpCommand(uri);
+
     throw new Error(
       withHelpRoute(
-        `The URI target ${uri} does not support \`${action}\`. Use \`wikigraph ${uri} --help\` to inspect valid predicates.`,
-        `wikigraph ${uri} --help`,
+        `The URI target ${uri} does not support \`${action}\`. Use \`${helpCommand}\` to inspect valid predicates.`,
+        helpCommand,
       ),
     );
   }
 
   return parseArchiveArguments(action, [uri, ...tail], values, helpRoute);
+}
+
+function rejectUnsupportedArchiveReverse(
+  action: CLIArchiveUriAction,
+  reverse: boolean | undefined,
+  helpRoute: string,
+): void {
+  if (reverse !== true) {
+    return;
+  }
+  if (action === "search") {
+    throw new Error(
+      withHelpRoute("`--reverse` cannot be combined with --query.", helpRoute),
+    );
+  }
+  if (
+    action === "evidence" ||
+    action === "get" ||
+    action === "list" ||
+    action === "related"
+  ) {
+    return;
+  }
+
+  rejectArchiveBooleanFlag(action, "--reverse", reverse, helpRoute);
 }
 
 function parseArchiveIndexUriArguments(
@@ -1003,7 +1059,7 @@ function parseArchiveIndexUriArguments(
   if (!isArchiveIndexAction(action)) {
     throw new Error(
       withHelpRoute(
-        `The index object does not support \`${action}\`. Read the index object directly, or use build, embed, external, or clear.`,
+        `The index object does not support \`${action}\`. Read the index object directly, or use enable, disable, embed, or external.`,
         CLI_HELP_ROUTES.uri,
       ),
     );
@@ -1041,12 +1097,13 @@ function parseArchiveIndexUriArguments(
   rejectArchiveBooleanFlag(action, "--confirm", values.confirm, helpRoute);
   rejectArchiveBooleanFlag(action, "--dry-run", values["dry-run"], helpRoute);
   rejectArchiveBooleanFlag(action, "--first", values.first, helpRoute);
-  if (action === "build") {
-    rejectArchiveBooleanFlag(action, "--json", values.json, helpRoute);
+  if (action === "enable") {
+    rejectStreamingJSONFlag(action, values.json, helpRoute);
   } else {
     rejectArchiveBooleanFlag(action, "--jsonl", values.jsonl, helpRoute);
   }
   rejectArchiveBooleanFlag(action, "--last", values.last, helpRoute);
+  rejectArchiveBooleanFlag(action, "--reverse", values.reverse, helpRoute);
   rejectArchiveBooleanFlag(action, "--root", values.root, helpRoute);
   rejectArchiveBooleanFlag(action, "--verbose", values.verbose, helpRoute);
   rejectCommandMetaFlags(values, action, helpRoute);
@@ -1234,7 +1291,7 @@ function parseArchiveCoverUriArguments(
   tail: readonly string[],
   values: ArchiveArgumentValues,
 ): ParsedCLIArguments {
-  const helpRoute = `wikigraph ${uri} ${action} --help`;
+  const helpRoute = formatWikiGraphHelpCommand(uri, action);
 
   if (values.help === true) {
     return {
@@ -1527,7 +1584,7 @@ function parseArchiveChapterUriArguments(
   tail: readonly string[],
   values: ArchiveArgumentValues,
 ): ParsedCLIArguments {
-  const helpRoute = `wikigraph ${uri} ${action} --help`;
+  const helpRoute = formatWikiGraphHelpCommand(uri, action);
 
   switch (target.kind) {
     case "collection":
@@ -2054,8 +2111,8 @@ function parseJobUriFirstArguments(
 
   const helpRoute =
     explicitAction === undefined
-      ? `wikigraph ${uri} --help`
-      : `wikigraph ${uri} ${action} --help`;
+      ? formatWikiGraphHelpCommand(uri)
+      : formatWikiGraphHelpCommand(uri, action);
   const tail = explicitAction === undefined ? [] : positionals.slice(2);
 
   if (jobTargetUri !== undefined) {
@@ -2160,8 +2217,8 @@ function parseLocalConfigUriFirstArguments(
   const action = explicitAction ?? "get";
   const helpRoute =
     explicitAction === undefined
-      ? `wikigraph ${uri} --help`
-      : `wikigraph ${uri} ${action} --help`;
+      ? formatWikiGraphHelpCommand(uri)
+      : formatWikiGraphHelpCommand(uri, action);
 
   if (section === undefined) {
     throw new Error(
@@ -2183,7 +2240,7 @@ function parseLocalConfigUriFirstArguments(
       throw new Error(
         withHelpRoute(
           `The URI target ${uri} does not support \`${action}\`.`,
-          `wikigraph ${uri} --help`,
+          formatWikiGraphHelpCommand(uri),
         ),
       );
     }
@@ -2570,7 +2627,7 @@ function parseQueueWorkerArguments(
 ): ParsedCLIArguments {
   const helpRoute = "wikigraph help";
 
-  rejectQueueJSONFlag("worker", values.json, helpRoute);
+  rejectStreamingJSONFlag("worker", values.json, helpRoute);
   rejectQueueJSONLFlag("worker", values.jsonl, helpRoute);
   rejectQueueExtraPositionals(
     "worker",
@@ -2600,6 +2657,23 @@ function rejectQueueJSONFlag(
   throw new Error(
     withHelpRoute(
       `\`wikigraph wikg://local/job ${action}\` does not support --json.`,
+      helpRoute,
+    ),
+  );
+}
+
+function rejectStreamingJSONFlag(
+  action: string,
+  value: boolean | undefined,
+  helpRoute: string,
+): void {
+  if (value !== true) {
+    return;
+  }
+
+  throw new Error(
+    withHelpRoute(
+      `The \`${action}\` command does not support --json because it streams progress events. Use --jsonl for line-delimited progress output.`,
       helpRoute,
     ),
   );
@@ -2687,7 +2761,7 @@ function parseQueueJobArguments(
   if (action === "status") {
     rejectQueueJSONLFlag(action, values.jsonl, helpRoute);
   } else if (action === "watch") {
-    rejectQueueJSONFlag(action, values.json, helpRoute);
+    rejectStreamingJSONFlag(action, values.json, helpRoute);
   } else {
     rejectQueueJSONFlag(action, values.json, helpRoute);
     rejectQueueJSONLFlag(action, values.jsonl, helpRoute);
@@ -3037,7 +3111,6 @@ function parseArchiveArguments(
         helpRoute,
       );
       rejectArchiveBooleanFlag(action, "--confirm", values.confirm, helpRoute);
-      rejectArchiveBooleanFlag(action, "--json", values.json, helpRoute);
       rejectArchiveBooleanFlag(action, "--jsonl", values.jsonl, helpRoute);
       rejectArchiveFlag(action, "--limit", values.limit, helpRoute);
       rejectArchiveFlag(action, "--role", values.role, helpRoute);
@@ -3046,6 +3119,7 @@ function parseArchiveArguments(
           action,
           archivePath: parsedArchivePath,
           ...(chapterId === undefined ? {} : { chapterId }),
+          ...(values.json === true ? { json: true } : {}),
         },
         help: false,
         kind: "archive",
@@ -3065,6 +3139,7 @@ function parseArchiveArguments(
       rejectArchiveFlag(action, "--chapter", values.chapter, helpRoute);
       rejectArchiveFlag(action, "--from", values.from, helpRoute);
       rejectArchiveFlag(action, "--role", values.role, helpRoute);
+      rejectArchiveBooleanFlag(action, "--reverse", values.reverse, helpRoute);
       rejectArchiveFlag(action, "--to", values.to, helpRoute);
       rejectArchiveBooleanFlag(action, "--confirm", values.confirm, helpRoute);
 
@@ -3109,6 +3184,7 @@ function parseArchiveArguments(
       rejectArchiveFlag(action, "--from", values.from, helpRoute);
       rejectArchiveFlag(action, "--role", values.role, helpRoute);
       rejectArchiveFlag(action, "--query", values.query, helpRoute);
+      rejectArchiveReverseQuery(values, helpRoute);
       rejectArchiveFlag(action, "--to", values.to, helpRoute);
       rejectArchiveBooleanFlag(action, "--confirm", values.confirm, helpRoute);
       return {
@@ -3132,6 +3208,7 @@ function parseArchiveArguments(
                   helpRoute,
                 ),
               }),
+          ...(values.reverse === true ? { reverse: true } : {}),
           ...(options.defaultKinds === undefined
             ? {}
             : { kinds: options.defaultKinds }),
@@ -3152,6 +3229,7 @@ function parseArchiveArguments(
       rejectArchiveFlag(action, "--limit", values.limit, helpRoute);
       rejectArchiveFlag(action, "--cursor", values.cursor, helpRoute);
       rejectArchiveFlag(action, "--query", values.query, helpRoute);
+      rejectArchiveReverseQuery(values, helpRoute);
       rejectArchiveFlag(action, "--role", values.role, helpRoute);
       rejectArchiveFlag(action, "--to", values.to, helpRoute);
       rejectArchiveBooleanFlag(action, "--all", values.all, helpRoute);
@@ -3167,6 +3245,7 @@ function parseArchiveArguments(
           ...parseEvidenceFlag(values.evidence, helpRoute),
           format: parseResultFormat(values),
           objectId: archivePath,
+          ...(values.reverse === true ? { reverse: true } : {}),
         },
         help: false,
         kind: "archive",
@@ -3188,6 +3267,7 @@ function parseArchiveArguments(
       if (relatedTarget === "chunk") {
         rejectArchiveFlag(action, "--role", values.role, helpRoute);
       }
+      rejectArchiveReverseQuery(values, helpRoute);
       rejectArchiveFlag(action, "--to", values.to, helpRoute);
       rejectArchiveBooleanFlag(action, "--confirm", values.confirm, helpRoute);
       return {
@@ -3210,6 +3290,7 @@ function parseArchiveArguments(
               }),
           objectId: archivePath,
           ...(values.query === undefined ? {} : { query: values.query }),
+          ...(values.reverse === true ? { reverse: true } : {}),
           ...(relatedTarget === "entity"
             ? parseRelatedRoleFlag(values.role, helpRoute)
             : {}),
@@ -3233,6 +3314,7 @@ function parseArchiveArguments(
       rejectArchiveFlag(action, "--role", values.role, helpRoute);
       rejectArchiveFlag(action, "--to", values.to, helpRoute);
       rejectArchiveFlag(action, "--evidence", values.evidence, helpRoute);
+      rejectArchiveReverseQuery(values, helpRoute);
       rejectArchiveBooleanFlag(action, "--confirm", values.confirm, helpRoute);
       validateEvidenceTargetUri(archivePath, helpRoute);
       return {
@@ -3254,6 +3336,7 @@ function parseArchiveArguments(
               }),
           objectId: archivePath,
           ...(values.query === undefined ? {} : { query: values.query }),
+          ...(values.reverse === true ? { reverse: true } : {}),
         },
         help: false,
         kind: "archive",
@@ -3274,6 +3357,7 @@ function parseArchiveArguments(
       rejectArchiveFlag(action, "--limit", values.limit, helpRoute);
       rejectArchiveFlag(action, "--cursor", values.cursor, helpRoute);
       rejectArchiveFlag(action, "--evidence", values.evidence, helpRoute);
+      rejectArchiveBooleanFlag(action, "--reverse", values.reverse, helpRoute);
       rejectArchiveFlag(action, "--role", values.role, helpRoute);
       rejectArchiveFlag(action, "--to", values.to, helpRoute);
       rejectArchiveBooleanFlag(action, "--all", values.all, helpRoute);
@@ -3302,6 +3386,7 @@ function parseArchiveArguments(
       rejectArchiveFlag(action, "--cursor", values.cursor, helpRoute);
       rejectArchiveFlag(action, "--evidence", values.evidence, helpRoute);
       rejectArchiveFlag(action, "--from", values.from, helpRoute);
+      rejectArchiveBooleanFlag(action, "--reverse", values.reverse, helpRoute);
       rejectArchiveFlag(action, "--to", values.to, helpRoute);
       rejectArchiveBooleanFlag(action, "--all", values.all, helpRoute);
       rejectArchiveBooleanFlag(action, "--confirm", values.confirm, helpRoute);
@@ -4623,9 +4708,9 @@ function isArchiveIndexAction(
   value: string | undefined,
 ): value is CLIArchiveIndexAction {
   return (
-    value === "build" ||
-    value === "clear" ||
+    value === "disable" ||
     value === "embed" ||
+    value === "enable" ||
     value === "external" ||
     value === "get"
   );
@@ -4887,6 +4972,17 @@ function parseSourceContextFlag(
   };
 }
 
+function rejectArchiveReverseQuery(
+  values: Pick<ArchiveArgumentValues, "query" | "reverse">,
+  helpRoute: string,
+): void {
+  if (values.query !== undefined && values.reverse === true) {
+    throw new Error(
+      withHelpRoute("`--reverse` cannot be combined with --query.", helpRoute),
+    );
+  }
+}
+
 function parseRelatedRoleFlag(
   value: string | undefined,
   helpRoute: string,
@@ -4968,6 +5064,7 @@ function normalizeArchiveInlineOptions(
     switch (item) {
       case "--json":
       case "--confirm":
+      case "--reverse":
         normalizedValues[item.slice(2)] = true;
         continue;
       case "--budget":
@@ -5273,4 +5370,13 @@ function rejectArchiveNonReadFlags(
     helpRoute,
   );
   rejectArchiveFlag(action, "--prompt", values.prompt, helpRoute);
+}
+
+function formatWikiGraphHelpCommand(uri: string, action?: string): string {
+  return formatShellCommand([
+    "wikigraph",
+    uri,
+    ...(action === undefined ? [] : [action]),
+    "--help",
+  ]);
 }

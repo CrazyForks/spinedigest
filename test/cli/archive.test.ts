@@ -1611,6 +1611,7 @@ describe("cli/archive", () => {
       cursor: "raw-next-evidence-cursor",
       format: "json",
       kind: "evidence",
+      order: "doc-asc",
       query: "RAG",
       targetUri: "wikg://entity/Q1",
     });
@@ -1817,7 +1818,7 @@ describe("cli/archive", () => {
       "Summary: 1/2 chapters, 800/1200 words, 66.7%",
     );
     expect(archiveMockState.textWrites[0]).toContain(
-      "Command: wikigraph wikg:///tmp/book.wikg/index build",
+      "Command: wikigraph wikg:///tmp/book.wikg/index enable",
     );
     expect(archiveMockState.textWrites[0]).toContain(
       "Command: wikigraph wikg://local/job add --input wikg:///tmp/book.wikg --task reading-graph --accept-cost",
@@ -1844,6 +1845,184 @@ describe("cli/archive", () => {
     );
     expect(archiveMockState.textWrites[0]).not.toContain("Calls:");
     expect(archiveMockState.textWrites[0]).not.toContain("Cost: $");
+  });
+
+  it("prints request and job performance hints for multi-chapter generation", async () => {
+    archiveMockState.inspectChapters = [
+      {
+        chapterId: 1,
+        childCount: 0,
+        depth: 0,
+        fragmentCount: 1,
+        stage: "sourced",
+        title: "First chapter",
+        tocPath: ["First chapter"],
+        words: 500,
+      },
+      {
+        chapterId: 2,
+        childCount: 0,
+        depth: 0,
+        fragmentCount: 1,
+        stage: "sourced",
+        title: "Second chapter",
+        tocPath: ["Second chapter"],
+        words: 600,
+      },
+      {
+        chapterId: 3,
+        childCount: 0,
+        depth: 0,
+        fragmentCount: 1,
+        stage: "sourced",
+        title: "Third chapter",
+        tocPath: ["Third chapter"],
+        words: 700,
+      },
+    ];
+    archiveMockState.serials = new Map([
+      [1, { knowledgeGraphReady: false, topologyReady: false }],
+      [2, { knowledgeGraphReady: false, topologyReady: false }],
+      [3, { knowledgeGraphReady: false, topologyReady: false }],
+    ]);
+
+    await runArchiveCommand({
+      action: "inspect",
+      archivePath: "/tmp/book.wikg",
+    });
+
+    const output = archiveMockState.textWrites[0] ?? "";
+    const requestIndex = output.indexOf(
+      "Command: wikigraph wikg://local/config/concurrent put request 6",
+    );
+    const jobIndex = output.indexOf(
+      "Command: wikigraph wikg://local/config/concurrent put job 4",
+    );
+
+    expect(requestIndex).toBeGreaterThanOrEqual(0);
+    expect(jobIndex).toBeGreaterThanOrEqual(0);
+    expect(requestIndex).toBeLessThan(jobIndex);
+  });
+
+  it("quotes generated inspect commands for shell copy and paste", async () => {
+    await runArchiveCommand({
+      action: "inspect",
+      archivePath: "/tmp/My Book.wikg",
+    });
+
+    expect(archiveMockState.textWrites[0]).toContain(
+      "Command: wikigraph 'wikg:///tmp/My Book.wikg/index' enable",
+    );
+    expect(archiveMockState.textWrites[0]).toContain(
+      "Command: wikigraph wikg://local/job add --input 'wikg:///tmp/My Book.wikg' --task reading-graph --accept-cost",
+    );
+  });
+
+  it("inspects archive readiness as a json report", async () => {
+    interface InspectJSONReport {
+      readonly improvements: readonly unknown[];
+      readonly performanceHints: readonly unknown[];
+      readonly retrievalGuidance: readonly string[];
+    }
+
+    await runArchiveCommand({
+      action: "inspect",
+      archivePath: "/tmp/book.wikg",
+      json: true,
+    });
+
+    const output = JSON.parse(
+      archiveMockState.textWrites[0] ?? "",
+    ) as unknown as InspectJSONReport;
+
+    expect(output).toMatchObject({
+      uri: "wikg:///tmp/book.wikg",
+      scope: { type: "archive" },
+      content: {
+        chapters: {
+          content: 2,
+          planned: 1,
+          total: 3,
+        },
+        sourceWords: 1200,
+        summaryWords: 120,
+      },
+      index: {
+        current: false,
+        fixCommand: "wikigraph wikg:///tmp/book.wikg/index enable",
+        querySupport: false,
+        status: "missing-or-outdated",
+        storage: "cache",
+      },
+      coverage: {
+        knowledgeGraph: {
+          coveredChapters: 1,
+          coveredWords: 800,
+          percent: "66.7%",
+          totalChapters: 2,
+          totalWords: 1200,
+        },
+        readingGraph: {
+          coveredChapters: 1,
+          coveredWords: 800,
+          percent: "66.7%",
+          totalChapters: 2,
+          totalWords: 1200,
+        },
+        summary: {
+          coveredChapters: 1,
+          coveredWords: 800,
+          percent: "66.7%",
+          totalChapters: 2,
+          totalWords: 1200,
+        },
+      },
+      help: { readiness: "wikigraph help readiness" },
+    });
+    expect(output.retrievalGuidance).toEqual(
+      expect.arrayContaining([
+        "Query support: unavailable until the searchable index is enabled.",
+      ]),
+    );
+    expect(output.improvements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: "wikigraph wikg:///tmp/book.wikg/index enable",
+          recommendation:
+            "Enable the searchable FTS index so --query filtering is available for scopes, related results, and evidence.",
+          title: "Enable searchable index",
+        }),
+        expect.objectContaining({
+          command:
+            "wikigraph wikg://local/job add --input wikg:///tmp/book.wikg --task reading-graph --accept-cost",
+          missingChapters: 1,
+          missingWords: 400,
+          planning: {
+            model: "openai-compatible/gpt-test",
+            timeSeconds: {
+              max: 139,
+              min: 49,
+            },
+            tokens: {
+              cacheableInput: 8000,
+              input: 10000,
+              output: 1600,
+            },
+          },
+          title: "Complete Reading Graph coverage",
+        }),
+      ]),
+    );
+    expect(output.performanceHints).toEqual([
+      {
+        command: "wikigraph wikg://local/config/concurrent put request 6",
+        current: 3,
+        kind: "request",
+        message:
+          "LLM request concurrency can often be higher. Use at least 4; 6-8 is usually faster when the provider allows it.",
+        recommended: 6,
+      },
+    ]);
   });
 
   it("inspects empty archive content without showing zero-percent coverage", async () => {
@@ -2371,6 +2550,7 @@ describe("cli/archive", () => {
       cursor: "raw-next-evidence-cursor",
       format: "json",
       kind: "evidence",
+      order: "doc-asc",
       query: "paragraph",
       sourceContext: 0,
       targetUri: "wikg://entity/Q1",

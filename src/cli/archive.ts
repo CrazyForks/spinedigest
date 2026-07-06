@@ -45,6 +45,8 @@ import { loadCLIConfig } from "./config.js";
 import { runConvertCommand } from "./convert.js";
 import {
   createGenerationPerformanceHints,
+  DEFAULT_GENERATION_JOB_CONCURRENCY,
+  DEFAULT_GENERATION_REQUEST_CONCURRENCY,
   formatGenerationPlanningDuration,
   formatGenerationPlanningModel,
   planGenerationTask,
@@ -53,6 +55,7 @@ import {
 } from "./generation-planning.js";
 import { readTextStreamFromStdin, writeTextToStdout } from "./io.js";
 import { formatCLIJSON, formatCLIJSONLine } from "./json.js";
+import { formatShellCommand } from "./shell.js";
 
 type ResultFormat = "json" | "jsonl" | "text";
 
@@ -128,6 +131,51 @@ interface InspectImprovement {
   readonly planning?: GenerationPlanningCost;
   readonly recommendation: string;
   readonly title: string;
+}
+
+interface InspectCoverage {
+  readonly coveredChapters: number;
+  readonly coveredWords: number;
+  readonly percent: string;
+  readonly totalChapters: number;
+  readonly totalWords: number;
+}
+
+interface InspectReport {
+  readonly uri: string;
+  readonly scope: {
+    readonly chapterId?: number;
+    readonly type: "archive" | "chapter";
+  };
+  readonly content: {
+    readonly chapters: {
+      readonly content: number;
+      readonly planned: number;
+      readonly total: number;
+    };
+    readonly sourceWords: number;
+    readonly summaryWords: number;
+  };
+  readonly index: {
+    readonly current: boolean;
+    readonly fixCommand?: string;
+    readonly impact?: string;
+    readonly querySupport: boolean;
+    readonly resource?: string;
+    readonly status: "current" | "missing-or-outdated";
+    readonly storage: "archive" | "cache";
+  };
+  readonly coverage: {
+    readonly knowledgeGraph: InspectCoverage;
+    readonly readingGraph: InspectCoverage;
+    readonly summary: InspectCoverage;
+  };
+  readonly retrievalGuidance: readonly string[];
+  readonly improvements: readonly InspectImprovement[];
+  readonly performanceHints: readonly GenerationPerformanceHint[];
+  readonly help: {
+    readonly readiness: string;
+  };
 }
 
 interface ArchiveOutputContext {
@@ -279,6 +327,7 @@ export async function runArchiveCommand(
                 ? {}
                 : { backlinks: args.backlinks }),
               ...(evidenceLimit === undefined ? {} : { evidenceLimit }),
+              ...(args.reverse === true ? { order: "doc-desc" } : {}),
               ...createOptionalSourceContext(args),
             }),
             outputContext,
@@ -305,6 +354,7 @@ export async function runArchiveCommand(
                 ...(cursor === undefined ? {} : { cursor }),
                 ...createOptionalEvidenceLimit(args),
                 ...(args.limit === undefined ? {} : { limit: args.limit }),
+                ...(args.reverse === true ? { order: "doc-desc" } : {}),
                 ...(args.query === undefined ? {} : { query: args.query }),
                 ...(args.role === undefined ? {} : { role: args.role }),
                 ...createOptionalSourceContext(args),
@@ -347,6 +397,7 @@ export async function runArchiveCommand(
                   {
                     ...(cursor === undefined ? {} : { cursor }),
                     ...(args.limit === undefined ? {} : { limit: args.limit }),
+                    ...(args.reverse === true ? { order: "doc-desc" } : {}),
                     ...(args.query === undefined ? {} : { query: args.query }),
                     ...createOptionalSourceContext(args),
                   },
@@ -361,6 +412,7 @@ export async function runArchiveCommand(
             await listArchiveEvidence(document, getObjectUri(args.objectId!), {
               ...(args.cursor === undefined ? {} : { cursor: args.cursor }),
               ...(args.limit === undefined ? {} : { limit: args.limit }),
+              ...(args.reverse === true ? { order: "doc-desc" } : {}),
               ...(args.query === undefined ? {} : { query: args.query }),
               ...createOptionalSourceContext(args),
             }),
@@ -523,7 +575,7 @@ function formatArchiveAlreadyExistsMessage(archivePath: string): string {
 
   return [
     `Archive already exists: ${archivePath}`,
-    `Use \`wikigraph ${uri} inspect\` to view it, or rerun with \`--replace\` to overwrite it.`,
+    `Use \`${formatShellCommand(["wikigraph", uri, "inspect"])}\` to view it, or rerun with \`--replace\` to overwrite it.`,
   ].join("\n");
 }
 
@@ -672,6 +724,7 @@ async function runNextArchivePage(args: CLIArchiveArguments): Promise<void> {
           await listArchiveEvidence(document, cursor.targetUri, {
             cursor: cursor.cursor,
             limit,
+            order: cursor.order,
             ...(cursor.query === undefined ? {} : { query: cursor.query }),
             ...(cursor.sourceContext === undefined
               ? {}
@@ -683,6 +736,7 @@ async function runNextArchivePage(args: CLIArchiveArguments): Promise<void> {
             continuationKind: "evidence",
             format,
             limit,
+            order: cursor.order,
             ...(cursor.query === undefined ? {} : { query: cursor.query }),
             ...(cursor.sourceContext === undefined
               ? {}
@@ -701,6 +755,7 @@ async function runNextArchivePage(args: CLIArchiveArguments): Promise<void> {
               ? {}
               : { evidenceLimit: cursor.evidenceLimit }),
             limit,
+            order: cursor.order,
             ...(cursor.query === undefined ? {} : { query: cursor.query }),
             ...(cursor.role === undefined ? {} : { role: cursor.role }),
             ...(cursor.sourceContext === undefined
@@ -716,6 +771,7 @@ async function runNextArchivePage(args: CLIArchiveArguments): Promise<void> {
               : { evidenceLimit: cursor.evidenceLimit }),
             format,
             limit,
+            order: cursor.order,
             ...(cursor.query === undefined ? {} : { query: cursor.query }),
             ...(cursor.role === undefined ? {} : { role: cursor.role }),
             ...(cursor.sourceContext === undefined
@@ -785,6 +841,7 @@ function createFindOptions(args: CLIArchiveArguments): ArchiveFindOptions {
     ...(args.cursor === undefined ? {} : { cursor: args.cursor }),
     ...createOptionalEvidenceLimit(args),
     ...(args.limit === undefined ? {} : { limit: args.limit }),
+    ...(args.reverse === true ? { order: "doc-desc" } : {}),
     ...createOptionalSourceContext(args),
     ...(args.triplePattern === undefined
       ? {}
@@ -818,6 +875,7 @@ function createArchiveOutputContext(
     ...createOptionalSourceContext(args),
     format: args.format ?? "text",
     limit: args.limit ?? DEFAULT_OUTPUT_LIMIT,
+    ...(args.reverse === true ? { order: "doc-desc" } : {}),
     ...(args.action !== "evidence" &&
     args.action !== "related" &&
     args.action !== "search"
@@ -913,6 +971,7 @@ async function createOutputContinuationCursor(
       cursor,
       format: context.format,
       kind: "evidence",
+      order: context.order ?? "doc-asc",
       ...(context.query === undefined ? {} : { query: context.query }),
       ...(context.sourceContext === undefined
         ? {}
@@ -933,6 +992,7 @@ async function createOutputContinuationCursor(
         : { evidenceLimit: context.evidenceLimit }),
       format: context.format,
       kind: "related",
+      order: context.order ?? "doc-asc",
       ...(context.query === undefined ? {} : { query: context.query }),
       ...(context.role === undefined ? {} : { role: context.role }),
       ...(context.sourceContext === undefined
@@ -1097,6 +1157,20 @@ async function writeArchiveInspectReport(
   document: ReadonlyDocument,
   args: CLIArchiveArguments,
 ): Promise<void> {
+  const report = await createArchiveInspectReport(document, args);
+
+  if (args.json === true) {
+    await writeTextToStdout(formatCLIJSON(report));
+    return;
+  }
+
+  await writeTextToStdout(formatArchiveInspectText(report));
+}
+
+async function createArchiveInspectReport(
+  document: ReadonlyDocument,
+  args: CLIArchiveArguments,
+): Promise<InspectReport> {
   const archiveUri = formatWikiGraphCommandUri(args.archivePath);
   const scopeUri =
     args.chapterId === undefined
@@ -1111,8 +1185,9 @@ async function writeArchiveInspectReport(
       loadCLIConfig(),
     ]);
   const concurrent = {
-    job: config.concurrent?.job ?? 3,
-    request: config.concurrent?.request ?? 6,
+    job: config.concurrent?.job ?? DEFAULT_GENERATION_JOB_CONCURRENCY,
+    request:
+      config.concurrent?.request ?? DEFAULT_GENERATION_REQUEST_CONCURRENCY,
   };
   const planningModel = formatGenerationPlanningModel(config.llm);
   const contentChapters = chapters.filter(
@@ -1150,59 +1225,104 @@ async function writeArchiveInspectReport(
     ),
   });
 
-  await writeTextToStdout(
-    [
-      "Archive Inspect",
-      `URI: ${scopeUri}`,
-      `Scope: ${args.chapterId === undefined ? "archive" : `chapter ${args.chapterId}`}`,
-      "",
-      "Content",
-      `Chapters: ${contentChapters.length} content / ${chapters.length} total`,
-      `Planned chapters: ${chapters.length - contentChapters.length}`,
-      `Source words: ${sourceWords}`,
-      `Summary words: ${summaryWords}`,
-      "",
-      "FTS Index",
-      `Status: ${ftsCurrent ? "current" : "missing or outdated"}`,
-      `Storage: ${indexSettings.ftsEmbedded ? "embedded in archive" : "local cache"}`,
-      `Query support: ${ftsCurrent ? "available" : "unavailable"}`,
+  return {
+    uri: scopeUri,
+    scope:
+      args.chapterId === undefined
+        ? { type: "archive" }
+        : { chapterId: args.chapterId, type: "chapter" },
+    content: {
+      chapters: {
+        content: contentChapters.length,
+        planned: chapters.length - contentChapters.length,
+        total: chapters.length,
+      },
+      sourceWords,
+      summaryWords,
+    },
+    index: {
+      current: ftsCurrent,
       ...(ftsCurrent
-        ? []
-        : [
-            "Impact: --query, related --query, and evidence --query are unavailable.",
-            `Fix: wikigraph ${archiveUri}/index build`,
-            "Resource: local CPU/disk time only; no LLM tokens.",
-          ]),
-      "",
-      "Coverage",
-      formatCoverageLine("Reading Graph", readingGraphCovered, contentChapters),
-      formatCoverageLine(
-        "Knowledge Graph",
+        ? {}
+        : {
+            fixCommand: formatShellCommand([
+              "wikigraph",
+              `${archiveUri}/index`,
+              "enable",
+            ]),
+            impact:
+              "--query, related --query, and evidence --query are unavailable.",
+            resource: "local CPU/disk time only; no LLM tokens.",
+          }),
+      querySupport: ftsCurrent,
+      status: ftsCurrent ? "current" : "missing-or-outdated",
+      storage: indexSettings.ftsEmbedded ? "archive" : "cache",
+    },
+    coverage: {
+      knowledgeGraph: createInspectCoverage(
         knowledgeGraphCovered,
         contentChapters,
       ),
-      formatCoverageLine("Summary", summaryCovered, contentChapters),
+      readingGraph: createInspectCoverage(readingGraphCovered, contentChapters),
+      summary: createInspectCoverage(summaryCovered, contentChapters),
+    },
+    retrievalGuidance: formatRetrievalGuidance({
+      ftsCurrent,
+      knowledgeGraphCovered,
+      readingGraphCovered,
+      contentChapters,
+      sourceWords,
+    }),
+    improvements,
+    performanceHints,
+    help: { readiness: "wikigraph help readiness" },
+  };
+}
+
+function formatArchiveInspectText(report: InspectReport): string {
+  return (
+    [
+      "Archive Inspect",
+      `URI: ${report.uri}`,
+      `Scope: ${report.scope.type === "archive" ? "archive" : `chapter ${report.scope.chapterId}`}`,
+      "",
+      "Content",
+      `Chapters: ${report.content.chapters.content} content / ${report.content.chapters.total} total`,
+      `Planned chapters: ${report.content.chapters.planned}`,
+      `Source words: ${report.content.sourceWords}`,
+      `Summary words: ${report.content.summaryWords}`,
+      "",
+      "FTS Index",
+      `Status: ${report.index.current ? "current" : "missing or outdated"}`,
+      `Storage: ${report.index.storage === "archive" ? "embedded in archive" : "local cache"}`,
+      `Query support: ${report.index.querySupport ? "available" : "unavailable"}`,
+      ...(report.index.current
+        ? []
+        : [
+            `Impact: ${report.index.impact}`,
+            `Fix: ${report.index.fixCommand}`,
+            `Resource: ${report.index.resource}`,
+          ]),
+      "",
+      "Coverage",
+      formatCoverageLine("Reading Graph", report.coverage.readingGraph),
+      formatCoverageLine("Knowledge Graph", report.coverage.knowledgeGraph),
+      formatCoverageLine("Summary", report.coverage.summary),
       "",
       "Retrieval Guidance",
-      ...formatRetrievalGuidance({
-        ftsCurrent,
-        knowledgeGraphCovered,
-        readingGraphCovered,
-        contentChapters,
-        sourceWords,
-      }),
+      ...report.retrievalGuidance,
       "",
       "Improvements",
-      ...(improvements.length === 0
+      ...(report.improvements.length === 0
         ? ["No immediate improvements recommended."]
         : [
-            ...improvements.flatMap(formatInspectImprovement),
+            ...report.improvements.flatMap(formatInspectImprovement),
             "",
-            ...formatInspectPerformanceHints(performanceHints),
-            ...(performanceHints.length === 0 ? [] : [""]),
-            "Readiness details: wikigraph help readiness",
+            ...formatInspectPerformanceHints(report.performanceHints),
+            ...(report.performanceHints.length === 0 ? [] : [""]),
+            `Readiness details: ${report.help.readiness}`,
           ]),
-    ].join("\n") + "\n",
+    ].join("\n") + "\n"
   );
 }
 
@@ -1254,19 +1374,28 @@ async function readSummaryWords(
   );
 }
 
-function formatCoverageLine(
-  label: string,
+function createInspectCoverage(
   covered: readonly InspectChapter[],
   total: readonly InspectChapter[],
-): string {
+): InspectCoverage {
   const coveredWords = sumWords(covered);
   const totalWords = sumWords(total);
 
-  if (total.length === 0 && totalWords === 0) {
+  return {
+    coveredChapters: covered.length,
+    coveredWords,
+    percent: formatPercent(coveredWords, totalWords),
+    totalChapters: total.length,
+    totalWords,
+  };
+}
+
+function formatCoverageLine(label: string, coverage: InspectCoverage): string {
+  if (coverage.totalChapters === 0 && coverage.totalWords === 0) {
     return `${label}: n/a, no source content`;
   }
 
-  return `${label}: ${covered.length}/${total.length} chapters, ${coveredWords}/${totalWords} words, ${formatPercent(coveredWords, totalWords)}`;
+  return `${label}: ${coverage.coveredChapters}/${coverage.totalChapters} chapters, ${coverage.coveredWords}/${coverage.totalWords} words, ${coverage.percent}`;
 }
 
 function formatRetrievalGuidance(input: {
@@ -1284,7 +1413,7 @@ function formatRetrievalGuidance(input: {
   }
 
   const lines = [
-    `Query support: ${input.ftsCurrent ? "available" : "unavailable until FTS index is built"}.`,
+    `Query support: ${input.ftsCurrent ? "available" : "unavailable until the searchable index is enabled"}.`,
   ];
 
   lines.push(
@@ -1343,16 +1472,26 @@ function createInspectImprovements(input: {
 
   if (!input.ftsCurrent) {
     improvements.push({
-      command: `wikigraph ${input.archiveUri}/index build`,
+      command: formatShellCommand([
+        "wikigraph",
+        `${input.archiveUri}/index`,
+        "enable",
+      ]),
       recommendation:
-        "Build the local FTS index so --query, related, and evidence commands are available.",
-      title: "Build FTS index",
+        "Enable the searchable FTS index so --query filtering is available for scopes, related results, and evidence.",
+      title: "Enable searchable index",
     });
   }
 
   if (input.contentChapters.length === 0) {
     improvements.push({
-      command: `wikigraph ${input.archiveUri}/chapter add --stage sourced`,
+      command: formatShellCommand([
+        "wikigraph",
+        `${input.archiveUri}/chapter`,
+        "add",
+        "--stage",
+        "sourced",
+      ]),
       recommendation:
         "No source content is available yet; add or import source text before graph or summary generation.",
       title: "Add source content",
@@ -1419,7 +1558,16 @@ function createGraphImprovement(input: {
 
   return [
     {
-      command: `wikigraph wikg://local/job add --input ${input.scopeUri} --task ${input.task} --accept-cost`,
+      command: formatShellCommand([
+        "wikigraph",
+        "wikg://local/job",
+        "add",
+        "--input",
+        input.scopeUri,
+        "--task",
+        input.task,
+        "--accept-cost",
+      ]),
       missingChapters: missing.length,
       missingWords,
       planning: planGenerationTask(
@@ -1715,14 +1863,12 @@ async function writeFindHits(
     return;
   }
 
-  const outputObjects = coalesceTextStreamObjects(objects);
-
   await writeTextToStdout(
-    `${outputObjects
+    `${objects
       .map((object) => formatFindObject(object))
       .join(
-        getListObjectSeparator(outputObjects),
-      )}${formatOpenShortUriHint(outputObjects, context)}${formatNextCursor(nextCursor)}${formatFindLensHint(result)}\n`,
+        getListObjectSeparator(objects),
+      )}${formatOpenShortUriHint(objects, context)}${formatNextCursor(nextCursor)}${formatFindLensHint(result)}\n`,
   );
 }
 
@@ -1783,14 +1929,10 @@ async function writeFindHitsWithoutContinuation(
     return;
   }
 
-  const outputObjects = coalesceTextStreamObjects(objects);
-
   await writeTextToStdout(
-    `${outputObjects
+    `${objects
       .map((object) => formatFindObject(object))
-      .join(
-        getListObjectSeparator(outputObjects),
-      )}${formatFindLensHint(result)}\n`,
+      .join(getListObjectSeparator(objects))}${formatFindLensHint(result)}\n`,
   );
 }
 
@@ -1809,98 +1951,6 @@ function mergeFindResultPages(
     limit: pages.reduce((total, page) => total + page.items.length, 0),
     nextCursor: null,
   };
-}
-
-function coalesceTextStreamObjects(
-  objects: readonly ArchiveOutputObject[],
-): readonly ArchiveOutputObject[] {
-  const coalesced: ArchiveOutputObject[] = [];
-
-  for (const object of objects) {
-    if (object.backlinks !== undefined) {
-      coalesced.push(object);
-      continue;
-    }
-
-    const previous = coalesced.at(-1);
-    const previousRange =
-      previous === undefined ? undefined : parseTextStreamObjectRange(previous);
-    const currentRange = parseTextStreamObjectRange(object);
-
-    if (
-      previous !== undefined &&
-      previousRange !== undefined &&
-      currentRange !== undefined &&
-      previousRange.chapterId === currentRange.chapterId &&
-      previousRange.stream === currentRange.stream &&
-      previousRange.end + 1 === currentRange.start
-    ) {
-      coalesced[coalesced.length - 1] = {
-        ...previous,
-        text: [previous.text, object.text].filter(isString).join("\n"),
-        uri: formatTextStreamObjectUri(
-          previousRange.chapterId,
-          previousRange.stream,
-          previousRange.start,
-          currentRange.end,
-        ),
-      };
-      continue;
-    }
-
-    coalesced.push(object);
-  }
-
-  return coalesced;
-}
-
-function parseTextStreamObjectRange(object: ArchiveOutputObject):
-  | {
-      readonly chapterId: number;
-      readonly end: number;
-      readonly start: number;
-      readonly stream: "source" | "summary";
-    }
-  | undefined {
-  const match =
-    /^wikg:\/\/chapter\/([1-9][0-9]*)\/(source|summary)#([0-9]+)(?:\.\.([0-9]+))?$/u.exec(
-      object.uri,
-    );
-
-  if (
-    match?.[1] === undefined ||
-    match[2] === undefined ||
-    match[3] === undefined
-  ) {
-    return undefined;
-  }
-
-  const start = Number(match[3]);
-  const end = match[4] === undefined ? start : Number(match[4]);
-
-  if (!Number.isInteger(start) || !Number.isInteger(end) || end < start) {
-    return undefined;
-  }
-
-  return {
-    chapterId: Number(match[1]),
-    end,
-    start,
-    stream: match[2] as "source" | "summary",
-  };
-}
-
-function formatTextStreamObjectUri(
-  chapterId: number,
-  stream: "source" | "summary",
-  start: number,
-  end: number,
-): string {
-  return `wikg://chapter/${chapterId}/${stream}#${start === end ? String(start) : `${start}..${end}`}`;
-}
-
-function isString(value: string | undefined): value is string {
-  return value !== undefined && value !== "";
 }
 
 async function writeEvidence(
@@ -2201,9 +2251,9 @@ function appendEntityNextSteps(
     text,
     "",
     "Next:",
-    `  wikigraph ${entityUri} evidence`,
-    `  wikigraph ${entityUri} related`,
-    `  wikigraph ${entityUri}/wikipage`,
+    `  ${formatShellCommand(["wikigraph", entityUri, "evidence"])}`,
+    `  ${formatShellCommand(["wikigraph", entityUri, "related"])}`,
+    `  ${formatShellCommand(["wikigraph", `${entityUri}/wikipage`])}`,
   ].join("\n");
 }
 
@@ -2620,7 +2670,7 @@ function formatOpenShortUriHint(
     return "";
   }
 
-  return `\n\nOpen short URIs with the archive locator, for example:\n  wikigraph ${formatWikiGraphCommandUri(context.archivePath, shortUri)}`;
+  return `\n\nOpen short URIs with the archive locator, for example:\n  ${formatShellCommand(["wikigraph", formatWikiGraphCommandUri(context.archivePath, shortUri)])}`;
 }
 
 function isShortOutputUri(uri: string): boolean {

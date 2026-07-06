@@ -25,6 +25,7 @@ export interface ChapterEntry {
   readonly chapterId: number;
   readonly childCount: number;
   readonly depth: number;
+  readonly documentOrder: number;
   readonly fragmentCount: number;
   readonly stage: ChapterStage;
   readonly title: string | null;
@@ -297,15 +298,10 @@ export async function generateChapterGraph(
         ? {}
         : { logDirPath: options.logDirPath }),
     });
-    const sourceText = await collectReaderText(
-      readChapterSource(openedDocument, chapterId),
-    );
-
-    await openedDocument.clearSerialSource(chapterId);
+    await openedDocument.clearSerialGraph(chapterId);
 
     await generation.buildTopologyInto(
       chapterId,
-      sourceText,
       createTopologyOptions(options),
       options.progressTracker,
     );
@@ -694,12 +690,16 @@ async function createChapterEntry(
     readonly tocPath: readonly string[];
   },
 ): Promise<ChapterEntry> {
-  const sourceSummary = await summarizeSerialSource(document, serialId);
+  const [serial, sourceSummary] = await Promise.all([
+    document.serials.getById(serialId),
+    summarizeSerialSource(document, serialId),
+  ]);
 
   return {
     chapterId: serialId,
     childCount: item.children.length,
     depth: input.depth,
+    documentOrder: serial?.documentOrder ?? serialId,
     fragmentCount: sourceSummary.fragmentCount,
     stage: await resolveChapterStage(
       document,
@@ -1431,33 +1431,6 @@ function createTopologyOptions(
       ? {}
       : { userLanguage: options.userLanguage }),
   };
-}
-
-async function* readChapterSource(
-  document: ReadonlyDocument,
-  chapterId: number,
-): ReaderTextStream {
-  const fragments = document.getSerialFragments(chapterId);
-
-  for (const fragmentId of await fragments.listFragmentIds()) {
-    const fragment = await fragments.getFragment(fragmentId);
-
-    for (const sentence of fragment.sentences) {
-      yield sentence.text;
-    }
-  }
-}
-
-async function collectReaderText(
-  stream: ReaderTextStream,
-): Promise<readonly string[]> {
-  const text: string[] = [];
-
-  for await (const chunk of stream) {
-    text.push(chunk);
-  }
-
-  return text;
 }
 
 function normalizeTitle(title: string | null | undefined): string | undefined {

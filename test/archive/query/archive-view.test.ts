@@ -112,7 +112,7 @@ describe("archive/query/archive-view", () => {
 
       try {
         await expect(findArchiveObjects(document, "missing")).rejects.toThrow(
-          "Wiki Graph search index is missing or outdated. Run `<archive-uri>/index build` before searching.",
+          "Wiki Graph search index is missing or outdated. Run `<archive-uri>/index enable` before searching.",
         );
       } finally {
         await document.release();
@@ -171,7 +171,7 @@ describe("archive/query/archive-view", () => {
             query: "Alpha",
           }),
         ).rejects.toThrow(
-          "Wiki Graph search index is missing or outdated. Run `<archive-uri>/index build` before searching.",
+          "Wiki Graph search index is missing or outdated. Run `<archive-uri>/index enable` before searching.",
         );
         await expect(
           listRelatedArchiveObjects(document, "wikg://entity/Q1", {
@@ -179,7 +179,7 @@ describe("archive/query/archive-view", () => {
             role: "subject",
           }),
         ).rejects.toThrow(
-          "Wiki Graph search index is missing or outdated. Run `<archive-uri>/index build` before searching.",
+          "Wiki Graph search index is missing or outdated. Run `<archive-uri>/index enable` before searching.",
         );
       } finally {
         await document.release();
@@ -216,6 +216,58 @@ describe("archive/query/archive-view", () => {
             type: "source",
           }),
         );
+      } finally {
+        await document.release();
+      }
+    });
+  });
+
+  it("coalesces expanded text search hits within a result page", async () => {
+    await withTempDir("spinedigest-archive-view-", async (path) => {
+      const document = await DirectoryDocument.open(`${path}/document`);
+
+      try {
+        await document.openSession(async (openedDocument) => {
+          await openedDocument.createSerial();
+          const draft = await openedDocument
+            .getSerialFragments(1)
+            .createDraft();
+
+          draft.addSentence("# Test Note", 3);
+          draft.addSentence("Alice studies graph retrieval.", 4);
+          draft.addSentence("Bob cites Alice in a research note.", 7);
+          await draft.commit();
+          await openedDocument.writeBookMeta({
+            authors: [],
+            description: null,
+            identifier: null,
+            language: "en",
+            publishedAt: null,
+            publisher: null,
+            sourceFormat: "markdown",
+            title: "Archive Fixture",
+            version: 1,
+          });
+          await openedDocument.writeToc({
+            items: [{ children: [], serialId: 1, title: "Chapter 1" }],
+            version: 1,
+          });
+        });
+        await rebuildArchiveSearchIndex(document);
+
+        const result = await findArchiveObjects(document, "Alice");
+
+        expect(result.items).toStrictEqual([
+          expect.objectContaining({
+            field: "source",
+            id: "wikg://chapter/1/source#0..2",
+            snippet:
+              "# Test Note\nAlice studies graph retrieval.\nBob cites Alice in a research note.",
+            type: "source",
+          }),
+        ]);
+        expect(result.limit).toBe(20);
+        expect(result.nextCursor).toBeNull();
       } finally {
         await document.release();
       }
@@ -1795,6 +1847,100 @@ describe("archive/query/archive-view", () => {
         expect(page.sourceFragments[0]?.text).toContain(
           "Source-only archives should be searchable.",
         );
+      } finally {
+        await document.release();
+      }
+    });
+  });
+
+  it("orders no-query source and evidence results by document flow", async () => {
+    await withTempDir("spinedigest-archive-view-", async (path) => {
+      const document = await DirectoryDocument.open(`${path}/document`);
+
+      try {
+        await document.openSession(async (openedDocument) => {
+          await openedDocument.createSerial();
+          await openedDocument.createSerial();
+
+          for (const serialId of [1, 2]) {
+            const draft = await openedDocument
+              .getSerialFragments(serialId)
+              .createDraft();
+
+            draft.addSentence(`Chapter ${serialId} source sentence.`, 4);
+            await draft.commit();
+          }
+
+          await openedDocument.mentions.saveMany([
+            {
+              chapterId: 1,
+              id: "flow-mention-one",
+              qid: "Q1",
+              rangeEnd: 9,
+              rangeStart: 0,
+              sentenceIndex: 0,
+              surface: "Chapter 1",
+            },
+            {
+              chapterId: 2,
+              id: "flow-mention-two",
+              qid: "Q1",
+              rangeEnd: 9,
+              rangeStart: 0,
+              sentenceIndex: 0,
+              surface: "Chapter 2",
+            },
+          ]);
+          await openedDocument.writeToc({
+            items: [
+              {
+                children: [],
+                serialId: 2,
+                title: "Second in id, first in document",
+              },
+              {
+                children: [],
+                serialId: 1,
+                title: "First in id, second in document",
+              },
+            ],
+            version: 1,
+          });
+        });
+
+        const chapters = await listArchiveCollection(document, {
+          types: ["chapter-title"],
+        });
+        const chaptersReverse = await listArchiveCollection(document, {
+          order: "doc-desc",
+          types: ["chapter-title"],
+        });
+        const evidence = await listArchiveEvidence(
+          document,
+          "wikg://entity/Q1",
+        );
+        const evidenceReverse = await listArchiveEvidence(
+          document,
+          "wikg://entity/Q1",
+          { order: "doc-desc" },
+        );
+
+        expect(chapters.items.map((item) => item.id)).toStrictEqual([
+          "chapter-title:2",
+          "chapter-title:1",
+        ]);
+        expect(chaptersReverse.items.map((item) => item.id)).toStrictEqual([
+          "chapter-title:1",
+          "chapter-title:2",
+        ]);
+        expect(evidence.items.map((item) => item.id)).toStrictEqual([
+          "wikg://chapter/2/source#0",
+          "wikg://chapter/1/source#0",
+        ]);
+        expect(evidenceReverse.items.map((item) => item.id)).toStrictEqual([
+          "wikg://chapter/1/source#0",
+          "wikg://chapter/2/source#0",
+        ]);
       } finally {
         await document.release();
       }

@@ -259,13 +259,18 @@ describe("cli/args", () => {
 
   it("parses archive index object commands", () => {
     expect(() =>
-      parseCLIArguments(["wikg:///tmp/book.wikg/index", "build", "--json"]),
-    ).toThrow("The `build` command does not support --json.");
+      parseCLIArguments(["wikg:///tmp/book.wikg/index", "enable", "--json"]),
+    ).toThrow(
+      "The `enable` command does not support --json because it streams progress events. Use --jsonl for line-delimited progress output.",
+    );
+    expect(() =>
+      parseCLIArguments(["wikg:///tmp/book.wikg/index", "--reverse"]),
+    ).toThrow("The `get` command does not support --reverse.");
     expect(
-      parseCLIArguments(["wikg:///tmp/book.wikg/index", "build", "--jsonl"]),
+      parseCLIArguments(["wikg:///tmp/book.wikg/index", "enable", "--jsonl"]),
     ).toStrictEqual({
       args: {
-        action: "build",
+        action: "enable",
         archivePath: "/tmp/book.wikg",
         jsonl: true,
       },
@@ -283,12 +288,12 @@ describe("cli/args", () => {
       kind: "archive-index",
     });
     expect(
-      parseCLIArguments(["wikg:///tmp/book.wikg/index", "build", "--help"]),
+      parseCLIArguments(["wikg:///tmp/book.wikg/index", "enable", "--help"]),
     ).toStrictEqual({
       help: true,
       helpText: renderUriPredicateHelpText(
         "index-object",
-        "build",
+        "enable",
         "wikg:///tmp/book.wikg/index",
       ),
       kind: "help",
@@ -300,19 +305,23 @@ describe("cli/args", () => {
       "Invalid help topic: build.",
     );
     expect(() =>
-      parseCLIArguments(["wikg:///tmp/book.wikg/index", "clear", "--dry-run"]),
-    ).toThrow("The `clear` command does not support --dry-run.");
+      parseCLIArguments([
+        "wikg:///tmp/book.wikg/index",
+        "disable",
+        "--dry-run",
+      ]),
+    ).toThrow("The `disable` command does not support --dry-run.");
     expect(() =>
-      parseCLIArguments(["wikg:///tmp/book.wikg/index", "clear", "--jsonl"]),
-    ).toThrow("The `clear` command does not support --jsonl.");
+      parseCLIArguments(["wikg:///tmp/book.wikg/index", "disable", "--jsonl"]),
+    ).toThrow("The `disable` command does not support --jsonl.");
     expect(() =>
       parseCLIArguments([
         "wikg:///tmp/book.wikg/index",
-        "clear",
+        "disable",
         "--title",
         "x",
       ]),
-    ).toThrow("The `clear` command does not support --title.");
+    ).toThrow("The `disable` command does not support --title.");
   });
 
   it("parses queue commands", () => {
@@ -510,7 +519,9 @@ describe("cli/args", () => {
 
     expect(() =>
       parseCLIArguments(["wikg://local/job/job-1", "watch", "--json"]),
-    ).toThrow("does not support --json");
+    ).toThrow(
+      "The `watch` command does not support --json because it streams progress events. Use --jsonl for line-delimited progress output.",
+    );
     expect(() => parseCLIArguments(["wikg://local/job", "--jsonl"])).toThrow(
       "does not support --jsonl",
     );
@@ -688,6 +699,7 @@ describe("cli/args", () => {
       parseCLIArguments([
         "wikg://book.wikg/entity/Q1",
         "evidence",
+        "--reverse",
         "--all",
         "--limit",
         "2",
@@ -704,6 +716,7 @@ describe("cli/args", () => {
         format: "jsonl",
         limit: 2,
         objectId: "wikg://book.wikg/entity/Q1",
+        reverse: true,
       },
       help: false,
       kind: "archive",
@@ -713,6 +726,7 @@ describe("cli/args", () => {
       parseCLIArguments([
         "wikg://book.wikg/entity/Q1",
         "related",
+        "--reverse",
         "--all",
         "--limit",
         "2",
@@ -732,10 +746,20 @@ describe("cli/args", () => {
         format: "jsonl",
         limit: 2,
         objectId: "wikg://book.wikg/entity/Q1",
+        reverse: true,
       },
       help: false,
       kind: "archive",
     });
+    expect(() =>
+      parseCLIArguments([
+        "wikg://book.wikg/entity/Q1",
+        "related",
+        "--query",
+        "agent",
+        "--reverse",
+      ]),
+    ).toThrow("`--reverse` cannot be combined with --query.");
 
     expect(
       parseCLIArguments(["wikg://book.wikg/triple/Q1/_/Q2"]),
@@ -1003,6 +1027,17 @@ describe("cli/args", () => {
         action: "inspect",
         archivePath,
         chapterId: 2,
+      },
+      help: false,
+      kind: "archive",
+    });
+    expect(
+      parseCLIArguments(["wikg://book.wikg", "inspect", "--json"]),
+    ).toStrictEqual({
+      args: {
+        action: "inspect",
+        archivePath,
+        json: true,
       },
       help: false,
       kind: "archive",
@@ -1901,7 +1936,13 @@ describe("cli/args", () => {
       "Without a current index",
     );
     expect(renderHelpTopicText("readiness")).toContain(
-      "built as local cache outside the `.wikg` archive",
+      "`wikigraph <archive-uri>/index enable` enables the searchable index as local cache outside the `.wikg` archive",
+    );
+    expect(renderHelpTopicText("readiness")).toContain(
+      "CLI archive writes keep it synchronized automatically",
+    );
+    expect(renderHelpTopicText("readiness")).toContain(
+      "wikigraph <archive-uri>/index enable --help",
     );
     expect(renderHelpTopicText("readiness")).toContain(
       "wikigraph <archive-uri>/index embed --help",
@@ -1946,6 +1987,12 @@ describe("cli/args", () => {
       "Use `--json` when an Agent or script needs one stable machine-readable response.",
     );
     expect(renderHelpTopicText("format")).toContain(
+      "Whole `source` and `summary` text objects are plain text streams and do not support `--json`.",
+    );
+    expect(renderHelpTopicText("format")).toContain(
+      "Ranged fragments such as `/source#20..30` and `/summary#20..30` are structured range objects and support `--json`.",
+    );
+    expect(renderHelpTopicText("format")).toContain(
       "JSONL may contain both object records and control records.",
     );
     expect(renderHelpTopicText("format")).toContain("--all --jsonl");
@@ -1978,10 +2025,30 @@ describe("cli/args", () => {
     expect(uriHelpText).toContain(
       String.raw`C:\Users\me\book.wikg -> wikg://C:/Users/me/book.wikg`,
     );
-    expect(uriHelpText).toContain("Retrieval order:");
+    expect(uriHelpText).toContain("Document Flow order:");
     expect(uriHelpText).toContain(
-      "Choose the narrowest URI scope that can answer the task.",
+      "`--reverse` cannot be combined with `--query`",
     );
+    expect(uriHelpText).toContain(
+      "wikigraph <archive-uri>/entity/<qid> evidence --reverse --limit 1",
+    );
+    expect(
+      renderUriPredicateHelpText(
+        "entity-object",
+        "evidence",
+        "wikg://book.wikg/entity/Q8018",
+      ),
+    ).toContain("wikigraph help uri");
+    expect(
+      renderUriPredicateHelpText(
+        "entity-object",
+        "related",
+        "wikg://book.wikg/entity/Q8018",
+      ),
+    ).toContain("`--reverse` reads Document Flow order backward");
+    expect(
+      renderUriHelpText("entity-object", "wikg://book.wikg/entity/Q8018"),
+    ).toContain("supports `--reverse` without `--query`");
     expect(renderHelpTopicText("format")).toContain(
       "Avoid `--all | head` as a preview pattern.",
     );
@@ -2017,6 +2084,9 @@ describe("cli/args", () => {
       "wikigraph wikg://book.wikg/chapter/3/summary#23..45",
     );
     expect(renderHelpTopicText("recipe")).toContain(
+      "wikigraph wikg://book.wikg/entity/Q8018 evidence --reverse --limit 1",
+    );
+    expect(renderHelpTopicText("recipe")).toContain(
       'wikigraph wikg://book.wikg/triple --query "attention memory" --evidence 2',
     );
     expect(renderHelpTopicText("recipe")).toContain(
@@ -2030,6 +2100,20 @@ describe("cli/args", () => {
     );
     expect(renderHelpTopicText("recipe")).toContain(
       "Use `--json` when you want stable Agent-readable fields",
+    );
+    expect(renderHelpTopicText("recipe")).toContain(
+      "ranged fragments such as `/source#20..30` support `--json`",
+    );
+    expect(uriHelpText).toContain(
+      "Ranged fragments such as `/source#4..8` and `/summary#4..8` are structured range objects.",
+    );
+    expect(
+      renderUriHelpText(
+        "chapter-source-object",
+        "wikg://book.wikg/chapter/3/source",
+      ),
+    ).toContain(
+      "Whole source reads are plain text streams and do not support `--json`; source range fragments are structured range objects and support `--json`.",
     );
     expect(renderHelpTopicText("recipe")).toContain(
       "wikigraph wikg://book.wikg/chapter/3/entity --all --jsonl",
