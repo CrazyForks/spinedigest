@@ -33,9 +33,13 @@ describe("wikimatch/wikispine", () => {
     );
     await chmod(commandPath, 0o755);
 
+    const progress: number[] = [];
     const candidates = await matchWikispineSentenceCandidates({
       command: commandPath,
       maxCandidatesPerSurface: 3,
+      onProgress: (event) => {
+        progress.push(event.coveredRangeEnd);
+      },
       sentences: [
         {
           range: { end: 5, start: 0 },
@@ -52,6 +56,7 @@ describe("wikimatch/wikispine", () => {
       JSON.stringify("前文句末"),
       JSON.stringify("句首有恩典"),
     ]);
+    expect(progress).toStrictEqual([5, 10, 12]);
     expect(candidates).toStrictEqual([
       {
         id: "c1",
@@ -109,12 +114,17 @@ describe("wikimatch/wikispine", () => {
       );
     };
 
+    const progress: number[] = [];
+
     await expect(
       matchWikispineSentenceCandidates({
         endpoint: "https://wikispine.example/",
         fetch: fetchMock,
         includeDisambiguation: false,
         maxCandidatesPerSurface: 1,
+        onProgress: (event) => {
+          progress.push(event.coveredRangeEnd);
+        },
         provider: "fetch",
         sentences: [
           {
@@ -139,6 +149,7 @@ describe("wikimatch/wikispine", () => {
         surface: "北京大学",
       },
     ]);
+    expect(progress).toStrictEqual([9, 9]);
     expect(requests).toStrictEqual([
       {
         body: {
@@ -151,6 +162,75 @@ describe("wikimatch/wikispine", () => {
         url: "https://wikispine.example/match",
       },
     ]);
+  });
+
+  it("rejects CLI matches when progress reporting fails", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "wikispine-test-"));
+    const commandPath = join(tempDir, "fake-wikispine.mjs");
+
+    await writeFile(
+      commandPath,
+      [
+        "#!/usr/bin/env node",
+        "console.log(JSON.stringify({ type: 'match', match: { start: 0, end: 4, surface_id: 1, qids: [{ qid: 'Q16952', disambiguation: false }] } }));",
+        "console.log(JSON.stringify({ type: 'done', stats: { matches: 1 } }));",
+      ].join("\n"),
+    );
+    await chmod(commandPath, 0o755);
+
+    await expect(
+      matchWikispineSentenceCandidates({
+        command: commandPath,
+        onProgress: () => Promise.reject(new Error("progress stopped")),
+        sentences: [
+          {
+            range: { end: 4, start: 0 },
+            text: "北京大学",
+          },
+        ],
+      }),
+    ).rejects.toThrow("progress stopped");
+  });
+
+  it("rejects fetch matches when progress reporting fails", async () => {
+    const fetchMock: typeof fetch = () =>
+      Promise.resolve(
+        new Response(
+          [
+            JSON.stringify({
+              match: {
+                end: 4,
+                qids: [{ disambiguation: false, qid: "Q16952" }],
+                start: 0,
+                surface_id: 1,
+              },
+              type: "match",
+            }),
+            JSON.stringify({ stats: { matches: 1 }, type: "done" }),
+          ].join("\n"),
+          {
+            headers: {
+              "content-type": "application/x-ndjson",
+            },
+            status: 200,
+          },
+        ),
+      );
+
+    await expect(
+      matchWikispineSentenceCandidates({
+        endpoint: "https://wikispine.example/",
+        fetch: fetchMock,
+        onProgress: () => Promise.reject(new Error("progress stopped")),
+        provider: "fetch",
+        sentences: [
+          {
+            range: { end: 4, start: 0 },
+            text: "北京大学",
+          },
+        ],
+      }),
+    ).rejects.toThrow("progress stopped");
   });
 
   it("uses the default fetch endpoint when none is configured", async () => {

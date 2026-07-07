@@ -134,20 +134,32 @@ export async function generateChapterKnowledgeGraphArtifact(
   await options.progressTracker?.updatePhase({
     done: 0,
     phase: "matching",
-    total: sentences.length,
-    unit: "sentence",
+    phaseDetail: "text",
+    total: text.length,
+    unit: "char",
   });
   const rawCandidates = await matchWikispineSentenceCandidates({
     includeDisambiguation: true,
+    onProgress: async (progress) => {
+      await options.progressTracker?.updatePhase({
+        done: progress.coveredRangeEnd,
+        force: false,
+        phase: "matching",
+        phaseDetail: "text",
+        total: text.length,
+        unit: "char",
+      });
+    },
     ...(options.wikispine ?? {}),
     sentences,
   });
   await options.progressTracker?.throwIfStopped();
   await options.progressTracker?.updatePhase({
-    done: sentences.length,
+    done: text.length,
     phase: "matching",
-    total: sentences.length,
-    unit: "sentence",
+    phaseDetail: "text",
+    total: text.length,
+    unit: "char",
   });
   const screenedCandidates = await screenCandidates({
     candidates: rawCandidates,
@@ -198,13 +210,6 @@ export async function generateChapterKnowledgeGraphArtifact(
     text,
   });
   await options.progressTracker?.throwIfStopped();
-  await options.progressTracker?.updatePhase({
-    done: 0,
-    phase: "relation-discovery",
-    total: mentions.length,
-    unit: "record",
-  });
-
   const mentionLinks = await discoverMentionLinks({
     fragments,
     mentions,
@@ -219,12 +224,6 @@ export async function generateChapterKnowledgeGraphArtifact(
     mentions,
     parameter: createKnowledgeGraphParameterInput(options),
     workspacePath: options.workspacePath,
-  });
-  await options.progressTracker?.updatePhase({
-    done: mentions.length,
-    phase: "relation-discovery",
-    total: mentions.length,
-    unit: "record",
   });
 
   return artifact;
