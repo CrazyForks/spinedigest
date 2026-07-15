@@ -5,7 +5,7 @@ import type {
   ReaderSegment,
   ReaderSentence,
   ReaderTextStream,
-} from "../src/reader/index.js";
+} from "../packages/core/src/reader/index.js";
 
 const EMPTY_DELTA: ReaderGraphDelta = {
   chunks: [],
@@ -20,11 +20,11 @@ const { compressTextMock, readerFragmentSummaryMock, readerSegmentMock } =
       vi.fn<(stream: ReaderTextStream) => AsyncIterable<ReaderSegment>>(),
   }));
 
-vi.mock("../src/editor/index.js", () => ({
+vi.mock("../packages/core/src/editor/index.js", () => ({
   compressText: compressTextMock,
 }));
 
-vi.mock("../src/reader/index.js", () => ({
+vi.mock("../packages/core/src/reader/index.js", () => ({
   Reader: class {
     public segment(stream: ReaderTextStream): AsyncIterable<ReaderSegment> {
       return readerSegmentMock(stream);
@@ -60,7 +60,7 @@ vi.mock("../src/reader/index.js", () => ({
     readerSegmentMock(stream),
 }));
 
-vi.mock("../src/topology/index.js", () => ({
+vi.mock("../packages/core/src/topology/index.js", () => ({
   Topology: class {
     public accept(): void {}
 
@@ -70,8 +70,11 @@ vi.mock("../src/topology/index.js", () => ({
   },
 }));
 
-import { DirectoryDocument } from "../src/document/index.js";
-import { SerialGeneration, writeSerialSource } from "../src/serial.js";
+import { DirectoryDocument } from "../packages/core/src/document/index.js";
+import {
+  SerialGeneration,
+  writeSerialSource,
+} from "../packages/core/src/serial.js";
 import { withTempDir } from "./helpers/temp.js";
 
 describe("serial", () => {
@@ -84,7 +87,7 @@ describe("serial", () => {
   });
 
   it("emits advance for a single fragment before completion", async () => {
-    await withTempDir("spinedigest-serial-", async (path) => {
+    await withTempDir("wikigraph-serial-", async (path) => {
       const document = await DirectoryDocument.open(path);
       const progressTracker = {
         advance: vi.fn((_wordsCount: number) => Promise.resolve()),
@@ -125,7 +128,7 @@ describe("serial", () => {
   });
 
   it("emits advance for every processed fragment", async () => {
-    await withTempDir("spinedigest-serial-", async (path) => {
+    await withTempDir("wikigraph-serial-", async (path) => {
       const document = await DirectoryDocument.open(path);
       const progressTracker = {
         advance: vi.fn((_wordsCount: number) => Promise.resolve()),
@@ -171,7 +174,7 @@ describe("serial", () => {
   });
 
   it("uses the original text as summary when a serial has one fragment", async () => {
-    await withTempDir("spinedigest-serial-", async (path) => {
+    await withTempDir("wikigraph-serial-", async (path) => {
       const document = await DirectoryDocument.open(path);
 
       readerSegmentMock.mockReturnValueOnce(
@@ -207,7 +210,7 @@ describe("serial", () => {
   });
 
   it("writes an empty summary when a serial has no fragments", async () => {
-    await withTempDir("spinedigest-serial-", async (path) => {
+    await withTempDir("wikigraph-serial-", async (path) => {
       const document = await DirectoryDocument.open(path);
 
       readerSegmentMock.mockReturnValueOnce(createSentenceStream([]));
@@ -230,7 +233,7 @@ describe("serial", () => {
   });
 
   it("can build topology and summary as separate phases", async () => {
-    await withTempDir("spinedigest-serial-", async (path) => {
+    await withTempDir("wikigraph-serial-", async (path) => {
       const document = await DirectoryDocument.open(path);
 
       readerSegmentMock.mockReturnValueOnce(
@@ -271,7 +274,7 @@ describe("serial", () => {
   });
 
   it("preserves imported source text while exposing normalized sentences", async () => {
-    await withTempDir("spinedigest-serial-", async (path) => {
+    await withTempDir("wikigraph-serial-", async (path) => {
       const document = await DirectoryDocument.open(path);
       const sourceText =
         "\n\n  Alpha wraps\ninside one sentence. Beta follows.\n\n";
@@ -296,7 +299,7 @@ describe("serial", () => {
   });
 
   it("does not build a summary before topology is ready", async () => {
-    await withTempDir("spinedigest-serial-", async (path) => {
+    await withTempDir("wikigraph-serial-", async (path) => {
       const document = await DirectoryDocument.open(path);
 
       try {
@@ -315,7 +318,7 @@ describe("serial", () => {
   });
 
   it("reuses an existing summary without recompressing", async () => {
-    await withTempDir("spinedigest-serial-", async (path) => {
+    await withTempDir("wikigraph-serial-", async (path) => {
       const document = await DirectoryDocument.open(path);
 
       readerSegmentMock.mockReturnValueOnce(
@@ -357,7 +360,7 @@ describe("serial", () => {
   });
 
   it("does not write reader fragment summaries into source text", async () => {
-    await withTempDir("spinedigest-serial-", async (path) => {
+    await withTempDir("wikigraph-serial-", async (path) => {
       const document = await DirectoryDocument.open(path);
 
       readerSegmentMock.mockReturnValueOnce(

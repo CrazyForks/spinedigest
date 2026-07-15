@@ -1,15 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { access } from "fs/promises";
 
-import { DirectoryDocument, ChunkRetention } from "../../src/document/index.js";
+import {
+  DirectoryDocument,
+  ChunkRetention,
+} from "../../packages/core/src/document/index.js";
 
-vi.mock("../../src/editor/index.js", () => ({
+vi.mock("../../packages/core/src/editor/index.js", () => ({
   compressText: vi.fn((options: { readonly groupId: number }) =>
     Promise.resolve(`summary group ${options.groupId}`),
   ),
 }));
 
-vi.mock("../../src/serial.js", () => ({
+vi.mock("../../packages/core/src/serial.js", () => ({
   SerialGeneration: class {
     readonly #document: DirectoryDocument;
 
@@ -60,19 +63,19 @@ import {
   generateChapterGraph,
   getChapterDetails,
   setChapterSource,
-} from "../../src/facade/chapter.js";
+} from "../../packages/core/src/facade/chapter.js";
 import {
   buildChapterGraphArtifact,
   buildChapterSummaryArtifactFromSnapshot,
   commitChapterGraphArtifact,
   readChapterBuildInput,
   snapshotChapterSummaryInput,
-} from "../../src/facade/chapter-build.js";
+} from "../../packages/core/src/facade/chapter-build.js";
 import { withTempDir } from "../helpers/temp.js";
 
 describe("facade/chapter graph", () => {
   it("rebuilds graph without duplicating source fragments", async () => {
-    await withTempDir("spinedigest-chapter-graph-", async (path) => {
+    await withTempDir("wikigraph-chapter-graph-", async (path) => {
       const document = await DirectoryDocument.open(path);
 
       try {
@@ -121,7 +124,7 @@ describe("facade/chapter graph", () => {
   });
 
   it("commits staged graph output without holding the source document", async () => {
-    await withTempDir("spinedigest-chapter-graph-", async (path) => {
+    await withTempDir("wikigraph-chapter-graph-", async (path) => {
       const document = await DirectoryDocument.open(`${path}/archive`);
 
       try {
@@ -162,7 +165,7 @@ describe("facade/chapter graph", () => {
   });
 
   it("remaps staged chunk ids when committing graph artifacts", async () => {
-    await withTempDir("spinedigest-chapter-graph-", async (path) => {
+    await withTempDir("wikigraph-chapter-graph-", async (path) => {
       const document = await DirectoryDocument.open(`${path}/archive`);
 
       try {
@@ -237,7 +240,7 @@ describe("facade/chapter graph", () => {
   });
 
   it("builds summary from a snapshot file without wikg-shaped temp documents", async () => {
-    await withTempDir("spinedigest-chapter-summary-", async (path) => {
+    await withTempDir("wikigraph-chapter-summary-", async (path) => {
       const document = await DirectoryDocument.open(`${path}/archive`);
 
       try {

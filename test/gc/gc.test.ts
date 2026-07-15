@@ -3,17 +3,20 @@ import { dirname, join } from "path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createWikiGraphTempDirectory } from "../../src/common/wiki-graph-temp.js";
-import { Database, DirectoryDocument } from "../../src/document/index.js";
-import { addBuildJob } from "../../src/facade/index.js";
-import { tryRunWikiGraphGc } from "../../src/gc/index.js";
+import { createWikiGraphTempDirectory } from "../../packages/core/src/common/wiki-graph-temp.js";
+import {
+  Database,
+  DirectoryDocument,
+} from "../../packages/core/src/document/index.js";
+import { addBuildJob } from "../../packages/core/src/facade/index.js";
+import { tryRunWikiGraphGc } from "../../packages/core/src/gc/index.js";
 import {
   createSearchSession,
   rebuildArchiveSearchIndex,
-} from "../../src/archive/query/index.js";
-import { writeWikgArchive } from "../../src/wikg/archive.js";
-import { SpineDigestFile } from "../../src/wikg/index.js";
-import { WikipageCache } from "../../src/wikipage/index.js";
+} from "../../packages/core/src/archive/query/index.js";
+import { writeWikgArchive } from "../../packages/core/src/wikg/archive.js";
+import { WikiGraphArchiveFile } from "../../packages/core/src/wikg/index.js";
+import { WikipageCache } from "../../packages/core/src/wikipage/index.js";
 import { withTempDir } from "../helpers/temp.js";
 
 const originalStateDir = process.env.WIKIGRAPH_STATE_DIR;
@@ -24,7 +27,7 @@ describe("gc", () => {
   });
 
   it("cleans expired search sessions, completed jobs, and old controlled tmp directories", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
 
       await createExpiredSearchSession();
@@ -59,7 +62,7 @@ describe("gc", () => {
   });
 
   it("removes expired wikipage cache entries", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       await createWikipageCacheRows(
         new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString(),
@@ -84,7 +87,7 @@ describe("gc", () => {
   });
 
   it("keeps fresh wikipage cache entries during forced GC", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       await createWikipageCacheRows(new Date().toISOString());
 
@@ -107,7 +110,7 @@ describe("gc", () => {
   });
 
   it("reports expired wikipage cache entries during dry-run GC", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       await createWikipageCacheRows(
         new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString(),
@@ -135,7 +138,7 @@ describe("gc", () => {
   });
 
   it("skips when another GC run owns the global lock", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       await insertGcLock();
 
@@ -147,7 +150,7 @@ describe("gc", () => {
   });
 
   it("keeps fresh sqlite cache during normal GC", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       const sqliteCachePath = await createCoordinatorSqliteCache(path, {
         updatedAt: Date.now(),
@@ -161,7 +164,7 @@ describe("gc", () => {
   });
 
   it("removes fresh sqlite cache during forced GC", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       const sqliteCachePath = await createCoordinatorSqliteCache(path, {
         updatedAt: Date.now(),
@@ -181,7 +184,7 @@ describe("gc", () => {
   });
 
   it("removes stale empty workspace directories", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       const workspaceBucketPath = join(
         path,
@@ -216,7 +219,7 @@ describe("gc", () => {
   });
 
   it("removes dirty external fts sqlite cache during normal GC", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       const sqliteCachePath = await createCoordinatorSqliteCache(path, {
         entryPath: "fts.db",
@@ -237,7 +240,7 @@ describe("gc", () => {
   });
 
   it("keeps current external fts sqlite cache during normal GC and removes it during forced GC", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       const { ftsPath } = await createArchiveWithExternalSearchIndex(path);
 
@@ -258,7 +261,7 @@ describe("gc", () => {
   });
 
   it("removes external fts sqlite cache when the source archive is missing", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       const { archivePath, ftsPath } =
         await createArchiveWithExternalSearchIndex(path);
@@ -272,12 +275,12 @@ describe("gc", () => {
   });
 
   it("removes external fts sqlite cache when the archive fingerprint changes", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       const { archivePath, ftsPath } =
         await createArchiveWithExternalSearchIndex(path);
 
-      await new SpineDigestFile(archivePath).write(async (document) => {
+      await new WikiGraphArchiveFile(archivePath).write(async (document) => {
         await document.openSession(async (openedDocument) => {
           const draft = await openedDocument
             .getSerialFragments(1)
@@ -296,7 +299,7 @@ describe("gc", () => {
   });
 
   it("removes orphaned coordinator workspace files", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       const workspaceBucketPath = join(
         path,
@@ -336,7 +339,7 @@ describe("gc", () => {
   });
 
   it("removes empty coordinator workspace descendants", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       const workspaceBucketPath = join(
         path,
@@ -380,7 +383,7 @@ describe("gc", () => {
   });
 
   it("keeps fresh terminal build jobs during normal GC", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       const job = await createCompletedJob(path, {
         ageMs: 0,
@@ -401,7 +404,7 @@ describe("gc", () => {
   });
 
   it("removes fresh terminal build jobs during forced GC", async () => {
-    await withTempDir("spinedigest-gc-", async (path) => {
+    await withTempDir("wikigraph-gc-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = join(path, "state");
       const job = await createCompletedJob(path, {
         ageMs: 0,
@@ -453,7 +456,7 @@ async function createArchiveWithExternalSearchIndex(path: string): Promise<{
   }
 
   await writeWikgArchive(documentPath, archivePath);
-  await new SpineDigestFile(archivePath).write(
+  await new WikiGraphArchiveFile(archivePath).write(
     async (openedDocument) => {
       await rebuildArchiveSearchIndex(openedDocument);
     },

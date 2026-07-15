@@ -2,7 +2,7 @@ import { access } from "fs/promises";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DirectoryDocument } from "../../src/document/index.js";
+import type { DirectoryDocument } from "../../packages/core/src/document/index.js";
 
 const digestMockState = vi.hoisted(() => ({
   generateCalls: [] as Array<{
@@ -20,7 +20,7 @@ const digestMockState = vi.hoisted(() => ({
   tempDocumentPaths: [] as string[],
 }));
 
-vi.mock("../../src/serial.js", () => ({
+vi.mock("../../packages/core/src/serial.js", () => ({
   SerialGeneration: class {
     readonly #document: DirectoryDocument;
 
@@ -78,7 +78,7 @@ vi.mock("../../src/serial.js", () => ({
   },
 }));
 
-vi.mock("../../src/facade/import.js", () => ({
+vi.mock("../../packages/core/src/facade/import.js", () => ({
   importSource: vi.fn(
     async (options: {
       readonly adapter: { readonly format: string };
@@ -130,8 +130,8 @@ import {
   digestMarkdownSession,
   digestTextStreamSession,
   digestTxtSession,
-} from "../../src/facade/digest.js";
-import { Language } from "../../src/common/language.js";
+} from "../../packages/core/src/facade/digest.js";
+import { Language } from "../../packages/core/src/common/language.js";
 import { withTempDir } from "../helpers/temp.js";
 
 describe("facade/digest", () => {
@@ -190,7 +190,7 @@ describe("facade/digest", () => {
   });
 
   it("keeps custom text-stream session directories and omits an empty toc title", async () => {
-    await withTempDir("spinedigest-digest-", async (path) => {
+    await withTempDir("wikigraph-digest-", async (path) => {
       const documentDirPath = `${path}/custom-document`;
 
       await digestTextStreamSession(
@@ -238,7 +238,7 @@ describe("facade/digest", () => {
       readonly type: string;
     }> = [];
 
-    await withTempDir("spinedigest-digest-", async () => {
+    await withTempDir("wikigraph-digest-", async () => {
       await digestTextStreamSession(
         {
           extractionPrompt: "Keep beats",
@@ -292,7 +292,7 @@ describe("facade/digest", () => {
   });
 
   it("routes source digest sessions through importSource with matching adapters", async () => {
-    await withTempDir("spinedigest-digest-", async (path) => {
+    await withTempDir("wikigraph-digest-", async (path) => {
       const epubTitle = await digestEpubSession(
         {
           documentDirPath: `${path}/epub`,

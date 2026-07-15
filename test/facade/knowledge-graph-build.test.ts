@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { DirectoryDocument } from "../../src/document/index.js";
+import { DirectoryDocument } from "../../packages/core/src/document/index.js";
 import {
   buildChapterKnowledgeGraphArtifact,
   clearChapterKnowledgeGraph,
@@ -8,13 +8,13 @@ import {
   createEnrichmentProgressReporter,
   generateChapterKnowledgeGraphArtifactFromSnapshot,
   groundWikimatchCandidates,
-} from "../../src/facade/index.js";
-import type { GuaranteedRequest } from "../../src/guaranteed/index.js";
+} from "../../packages/core/src/facade/index.js";
+import type { GuaranteedRequest } from "../../packages/core/src/guaranteed/index.js";
 import { withTempDir } from "../helpers/temp.js";
 
 describe("facade/knowledge-graph-build", () => {
   it("generates knowledge graph artifacts from a snapshot without a document session", async () => {
-    await withTempDir("spinedigest-kg-snapshot-", async (path) => {
+    await withTempDir("wikigraph-kg-snapshot-", async (path) => {
       const artifact = await generateChapterKnowledgeGraphArtifactFromSnapshot(
         1,
         {
@@ -451,7 +451,7 @@ describe("facade/knowledge-graph-build", () => {
   });
 
   it("commits chapter mention evidence from JSONL artifacts", async () => {
-    await withTempDir("spinedigest-knowledge-graph-build-", async (path) => {
+    await withTempDir("wikigraph-knowledge-graph-build-", async (path) => {
       const document = await DirectoryDocument.open(`${path}/document`);
 
       try {
@@ -580,7 +580,7 @@ describe("facade/knowledge-graph-build", () => {
   });
 
   it("marks knowledge graph ready for empty first-pass artifacts", async () => {
-    await withTempDir("spinedigest-knowledge-graph-build-", async (path) => {
+    await withTempDir("wikigraph-knowledge-graph-build-", async (path) => {
       const document = await DirectoryDocument.open(`${path}/document`);
 
       try {
@@ -604,7 +604,7 @@ describe("facade/knowledge-graph-build", () => {
   });
 
   it("rejects mention links that point outside the artifact", async () => {
-    await withTempDir("spinedigest-knowledge-graph-build-", async (path) => {
+    await withTempDir("wikigraph-knowledge-graph-build-", async (path) => {
       const document = await DirectoryDocument.open(`${path}/document`);
 
       try {
@@ -643,7 +643,7 @@ describe("facade/knowledge-graph-build", () => {
   });
 
   it("rejects negative mention sentence indexes", async () => {
-    await withTempDir("spinedigest-knowledge-graph-build-", async (path) => {
+    await withTempDir("wikigraph-knowledge-graph-build-", async (path) => {
       await expect(
         buildChapterKnowledgeGraphArtifact(1, {
           mentionLinks: [],

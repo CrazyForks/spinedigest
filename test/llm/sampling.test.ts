@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { SpineDigestScope } from "../../src/common/llm-scope.js";
+import { WikiGraphScope } from "../../packages/core/src/common/llm-scope.js";
 import {
   getScopeDefaults,
   resolveSamplingSetting,
   resolveTemperatureSetting,
-} from "../../src/llm/sampling.js";
+} from "../../packages/core/src/llm/sampling.js";
 
 describe("llm/sampling", () => {
   it("resolves static and ranged sampling values", () => {
@@ -25,7 +25,7 @@ describe("llm/sampling", () => {
   it("resolves scoped defaults with fallback behavior", () => {
     expect(
       getScopeDefaults(
-        SpineDigestScope.ReaderExtraction,
+        WikiGraphScope.ReaderExtraction,
         undefined,
         [0.1, 0.2],
         0.9,
@@ -37,9 +37,9 @@ describe("llm/sampling", () => {
 
     expect(
       getScopeDefaults(
-        SpineDigestScope.ReaderExtraction,
+        WikiGraphScope.ReaderExtraction,
         {
-          [SpineDigestScope.ReaderExtraction]: {
+          [WikiGraphScope.ReaderExtraction]: {
             temperature: 0.4,
           },
         },

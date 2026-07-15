@@ -68,8 +68,8 @@ const queueMockState = vi.hoisted(() => ({
   writeCalls: [] as string[],
 }));
 
-vi.mock("../../src/wikg/spine-digest-file.js", () => ({
-  SpineDigestFile: class {
+vi.mock("../../packages/core/src/wikg/wiki-graph-archive-file.js", () => ({
+  WikiGraphArchiveFile: class {
     readonly #path: string;
 
     public constructor(path: string) {
@@ -125,7 +125,7 @@ vi.mock("../../src/wikg/spine-digest-file.js", () => ({
   },
 }));
 
-vi.mock("../../src/facade/index.js", () => ({
+vi.mock("../../packages/core/src/facade/index.js", () => ({
   addBuildJob: vi.fn((options: unknown) => {
     queueMockState.addCalls.push(options);
     return Promise.resolve({
@@ -260,18 +260,18 @@ vi.mock("../../src/facade/index.js", () => ({
   updateBuildJobTarget: vi.fn(),
 }));
 
-vi.mock("../../src/cli/io.js", () => ({
+vi.mock("../../packages/cli/src/cli/io.js", () => ({
   writeTextToStdout: vi.fn((text: string) => {
     queueMockState.textWrites.push(text);
     return Promise.resolve();
   }),
 }));
 
-vi.mock("../../src/cli/config.js", () => ({
+vi.mock("../../packages/cli/src/cli/config.js", () => ({
   loadCLIConfig: vi.fn(() => Promise.resolve(queueMockState.cliConfig)),
 }));
 
-vi.mock("../../src/cli/stage-runtime.js", () => ({
+vi.mock("../../packages/cli/src/cli/stage-runtime.js", () => ({
   createStageLLM: vi.fn((_config: unknown, options: unknown) => {
     queueMockState.createStageLLMCalls.push(options);
     return {};
@@ -293,7 +293,10 @@ vi.mock("../../src/cli/stage-runtime.js", () => ({
   ),
 }));
 
-import { runQueueCommand } from "../../src/cli/queue.js";
+import {
+  runQueueCommand,
+  runQueueWorker,
+} from "../../packages/cli/src/cli/queue.js";
 
 describe("cli/queue", () => {
   const originalDisableAutostart =
@@ -773,9 +776,7 @@ describe("cli/queue", () => {
       state: "running",
     };
 
-    await runQueueCommand({
-      action: "worker",
-    });
+    await runQueueWorker();
 
     const reporter = {
       addOutputCharacters: vi.fn(() => Promise.resolve()),
@@ -854,9 +855,7 @@ describe("cli/queue", () => {
   });
 
   it("uses default queue concurrency for worker slots", async () => {
-    await runQueueCommand({
-      action: "worker",
-    });
+    await runQueueWorker();
 
     expect(queueMockState.runWorkerOptions?.concurrency).toBe(3);
   });
@@ -868,9 +867,7 @@ describe("cli/queue", () => {
       },
     };
 
-    await runQueueCommand({
-      action: "worker",
-    });
+    await runQueueWorker();
 
     expect(queueMockState.runWorkerOptions?.concurrency).toBe(5);
   });
@@ -887,9 +884,7 @@ describe("cli/queue", () => {
       target: "knowledge-graph",
     };
 
-    await runQueueCommand({
-      action: "worker",
-    });
+    await runQueueWorker();
 
     const reporter = {
       addOutputCharacters: vi.fn(() => Promise.resolve()),
@@ -994,9 +989,7 @@ describe("cli/queue", () => {
       target: "knowledge-graph",
     };
 
-    await runQueueCommand({
-      action: "worker",
-    });
+    await runQueueWorker();
 
     const reporter = {
       addOutputCharacters: vi.fn(() => Promise.resolve()),

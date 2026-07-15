@@ -2,12 +2,12 @@ import { readFile } from "fs/promises";
 
 import { describe, expect, it } from "vitest";
 
-import { LLMCache } from "../../src/llm/cache.js";
+import { LLMCache } from "../../packages/core/src/llm/cache.js";
 import { withTempDir } from "../helpers/temp.js";
 
 describe("llm/cache", () => {
   it("creates, writes, and reads cache entries", async () => {
-    await withTempDir("spinedigest-cache-", async (path) => {
+    await withTempDir("wikigraph-cache-", async (path) => {
       const cache = new LLMCache(path);
       const entry = cache.createEntry("alpha", "cached-response");
 
@@ -21,7 +21,7 @@ describe("llm/cache", () => {
   });
 
   it("returns undefined for missing cache entries", async () => {
-    await withTempDir("spinedigest-cache-", async (path) => {
+    await withTempDir("wikigraph-cache-", async (path) => {
       const cache = new LLMCache(path);
 
       await expect(cache.read("missing")).resolves.toBeUndefined();

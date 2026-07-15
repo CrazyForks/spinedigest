@@ -2,11 +2,11 @@ import { join } from "path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { Database } from "../../../src/document/index.js";
+import { Database } from "../../../packages/core/src/document/index.js";
 import {
   createSearchSession,
   deleteArchiveSearchSessions,
-} from "../../../src/archive/query/search-cache.js";
+} from "../../../packages/core/src/archive/query/search-cache.js";
 import { withTempDir } from "../../helpers/temp.js";
 
 const originalStateDir = process.env.WIKIGRAPH_STATE_DIR;
@@ -17,7 +17,7 @@ describe("archive/query/search-cache", () => {
   });
 
   it("creates indexes for search session lookup and ranking", async () => {
-    await withTempDir("spinedigest-search-cache-", async (path) => {
+    await withTempDir("wikigraph-search-cache-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = path;
 
       await createSearchSession({
@@ -71,7 +71,7 @@ describe("archive/query/search-cache", () => {
   });
 
   it("removes predicate dictionary entries after their triple hits are deleted", async () => {
-    await withTempDir("spinedigest-search-cache-", async (path) => {
+    await withTempDir("wikigraph-search-cache-", async (path) => {
       process.env.WIKIGRAPH_STATE_DIR = path;
 
       await createSearchSession({

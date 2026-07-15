@@ -10,27 +10,30 @@ const {
   segmentTextStreamMock: vi.fn(),
 }));
 
-vi.mock("../../src/reader/chunk-batch/extract.js", () => ({
+vi.mock("../../packages/core/src/reader/chunk-batch/extract.js", () => ({
   extractBookCoherenceChunkBatch: extractBookCoherenceChunkBatchMock,
   extractUserFocusedChunkBatch: extractUserFocusedChunkBatchMock,
 }));
 
-vi.mock("../../src/reader/segment/segment.js", () => ({
+vi.mock("../../packages/core/src/reader/segment/segment.js", () => ({
   segmentTextStream: segmentTextStreamMock,
 }));
 
-import { Reader } from "../../src/reader/reader.js";
-import { Language } from "../../src/common/language.js";
+import { Reader } from "../../packages/core/src/reader/reader.js";
+import { Language } from "../../packages/core/src/common/language.js";
 import {
-  SPINE_DIGEST_READER_SCOPES,
-  SpineDigestScope,
-} from "../../src/common/llm-scope.js";
-import { ChunkImportance, ChunkRetention } from "../../src/document/index.js";
+  WIKI_GRAPH_READER_SCOPES,
+  WikiGraphScope,
+} from "../../packages/core/src/common/llm-scope.js";
+import {
+  ChunkImportance,
+  ChunkRetention,
+} from "../../packages/core/src/document/index.js";
 import type {
   SentenceStreamAdapter,
   SentenceStreamItem,
   TextStream,
-} from "../../src/reader/segment/types.js";
+} from "../../packages/core/src/reader/segment/types.js";
 
 describe("reader/reader", () => {
   beforeEach(() => {
@@ -140,8 +143,8 @@ describe("reader/reader", () => {
       expect.objectContaining({
         extractionGuidance: "Focus on plot",
         scopes: {
-          choice: SpineDigestScope.ReaderChoice,
-          extraction: SpineDigestScope.ReaderExtraction,
+          choice: WikiGraphScope.ReaderChoice,
+          extraction: WikiGraphScope.ReaderExtraction,
         },
         userLanguage: Language.English,
       }),
@@ -349,7 +352,7 @@ describe("reader/reader", () => {
 function createReader(input?: { readonly segmenter?: SentenceStreamAdapter }) {
   let nextId = 1;
 
-  return new Reader<SpineDigestScope>({
+  return new Reader<WikiGraphScope>({
     attention: {
       capacity: 2,
       generationDecayFactor: 0.5,
@@ -357,7 +360,7 @@ function createReader(input?: { readonly segmenter?: SentenceStreamAdapter }) {
     },
     extractionGuidance: "Focus on plot",
     llm: {} as never,
-    scopes: SPINE_DIGEST_READER_SCOPES,
+    scopes: WIKI_GRAPH_READER_SCOPES,
     sentenceTextSource: {
       getSentence: (sentenceId) => Promise.resolve(sentenceId.join(":")),
     },
