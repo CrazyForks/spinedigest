@@ -36,6 +36,8 @@ import {
   getSingleObjectEvidenceLimit,
   isArchiveRootGet,
   readArchiveDocument,
+  resolveArchiveCommandRuntimeArguments,
+  resolveArchiveRuntimeLocation,
   runNextArchivePage,
   writeArchiveRoot,
 } from "./run/index.js";
@@ -44,6 +46,8 @@ import { resolveArchiveChapterScope } from "./run/scope.js";
 export async function runArchiveCommand(
   args: CLIArchiveArguments,
 ): Promise<void> {
+  args = await resolveArchiveCommandRuntimeArguments(args);
+
   switch (args.action) {
     case "create":
       await createArchive(args);
@@ -64,9 +68,12 @@ export async function runArchiveCommand(
       });
       return;
     case "inspect":
-      await readArchiveDocument(args.archivePath, async (document) => {
-        await writeArchiveInspectReport(document, args);
-      });
+      await readArchiveDocument(
+        (await resolveArchiveRuntimeLocation(args.archivePath)).archivePath,
+        async (document) => {
+          await writeArchiveInspectReport(document, args);
+        },
+      );
       return;
     case "search":
       await readArchiveDocument(
