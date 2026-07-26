@@ -188,6 +188,7 @@ function classifyArchiveUriHelpTarget(uri: string): UriHelpTargetName {
   }
 
   const path = stripObjectUriPrefix(objectUri);
+  rejectPredicateLikeObjectSuffix(uri, path);
 
   if (parseMetadataTarget(objectUri) !== undefined) {
     return "metadata-object";
@@ -261,7 +262,7 @@ function classifyArchiveUriHelpTarget(uri: string): UriHelpTargetName {
   if (isTripleScopePath(path)) {
     return "triple-scope";
   }
-  if (/^(?:chapter\/[1-9][0-9]*\/)?triple(?:\/.*)?$/u.test(path)) {
+  if (/^(?:chapter\/[1-9][0-9]*\/)?triple\/[^/]+\/[^/]+\/[^/]+$/u.test(path)) {
     return "triple-object";
   }
 
@@ -271,6 +272,50 @@ function classifyArchiveUriHelpTarget(uri: string): UriHelpTargetName {
       CLI_HELP_ROUTES.uri,
     ),
   );
+}
+
+function rejectPredicateLikeObjectSuffix(uri: string, path: string): void {
+  const suggestion = getPredicateLikeObjectSuffixSuggestion(uri, path);
+  if (suggestion === undefined) {
+    return;
+  }
+  throw new Error(
+    withHelpRoute(
+      `Predicate-like URI suffixes are not object URIs: ${uri}. Use predicate form: ${suggestion}`,
+      CLI_HELP_ROUTES.uri,
+    ),
+  );
+}
+
+function getPredicateLikeObjectSuffixSuggestion(
+  uri: string,
+  path: string,
+): string | undefined {
+  const parts = path.split("/");
+  const suffix = parts.at(-1);
+  if (suffix !== "evidence" && suffix !== "related" && suffix !== "pack") {
+    return undefined;
+  }
+  const objectParts = stripOptionalChapterObjectPrefix(parts.slice(0, -1));
+  if (objectParts[0] === "entity" && objectParts.length === 2) {
+    return `${uri.slice(0, -suffix.length - 1)} ${suffix}`;
+  }
+  if (objectParts[0] === "chunk" && objectParts.length === 2) {
+    return `${uri.slice(0, -suffix.length - 1)} ${suffix}`;
+  }
+  if (objectParts[0] === "triple" && objectParts.length === 4) {
+    return `${uri.slice(0, -suffix.length - 1)} ${suffix}`;
+  }
+  return undefined;
+}
+
+function stripOptionalChapterObjectPrefix(
+  parts: readonly string[],
+): readonly string[] {
+  if (parts[0] === "chapter" && parts[1] !== undefined) {
+    return parts.slice(2);
+  }
+  return parts;
 }
 
 function hasUriFragment(uri: string): boolean {
