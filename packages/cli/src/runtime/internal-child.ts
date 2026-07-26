@@ -2,6 +2,8 @@ import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { join, resolve } from "path";
 
+import { getCLICwd, getCLIEnv, getCLIEnvValue } from "./context.js";
+
 export type InternalChildKind = "gc-worker" | "queue-worker";
 
 export interface InternalChildSpawnOptions {
@@ -22,9 +24,10 @@ export function spawnInternalChild(
   const command = createInternalChildCommand(kind, options.args ?? []);
 
   return spawn(command.command, command.args, {
+    cwd: getCLICwd(),
     detached: options.detached === true,
     env: {
-      ...process.env,
+      ...getCLIEnv(),
       [INTERNAL_CHILD_ENV_KEY]: kind,
     },
     stdio: options.detached === true ? "ignore" : ["ignore", "pipe", "pipe"],
@@ -77,8 +80,10 @@ function createInternalChildCommand(
   kind: InternalChildKind,
   args: readonly string[],
 ): { readonly args: readonly string[]; readonly command: string } {
-  if (process.env.WIKIGRAPH_DEV !== undefined) {
-    const projectRoot = resolveDevProjectRoot(process.env.WIKIGRAPH_DEV);
+  const devStateDirPath = getCLIEnvValue("WIKIGRAPH_DEV");
+
+  if (devStateDirPath !== undefined) {
+    const projectRoot = resolveDevProjectRoot(devStateDirPath);
 
     return {
       args: [
@@ -124,7 +129,7 @@ function resolveProductionEntryPath(kind: InternalChildKind): string {
   const filename = `${kind}.js`;
   const distDirPath =
     globalThis.__WIKIGRAPH_CLI_DIST_DIR__ ??
-    resolve(process.cwd(), "packages", "cli", "dist");
+    resolve(getCLICwd(), "packages", "cli", "dist");
   const adjacent = join(distDirPath, filename);
 
   if (existsSync(adjacent)) {
