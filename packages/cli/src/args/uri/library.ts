@@ -25,11 +25,15 @@ import {
   rejectArchiveFlag,
   stripObjectUriPrefix,
 } from "../helpers.js";
+import { parseNonNegativeIntegerFlag } from "../helper/parse.js";
 import { parseArchiveArguments } from "../archive.js";
 import { parseChapterTarget } from "./chapter/target.js";
 import { isTripleScopePath } from "./triple-pattern.js";
 
 const LIBRARY_ARCHIVE_ACTIONS = new Set(["get", "move", "remove"]);
+const LIBRARY_ARCHIVE_COLLECTION_ACTIONS = new Set(["add", "list", "scan"]);
+const LIBRARY_ARCHIVE_PATH_ACTIONS = new Set(["get", "set"]);
+const LIBRARY_ARCHIVE_TREE_ACTIONS = new Set(["archive-tree"]);
 const LIBRARY_METADATA_ACTIONS = new Set([
   "clear",
   "delete",
@@ -37,15 +41,9 @@ const LIBRARY_METADATA_ACTIONS = new Set([
   "put",
   "set",
 ]);
-const LIBRARY_SCOPE_ACTIONS = new Set([
-  "add",
-  "create",
-  "get",
-  "list",
-  "rebind",
-  "remove",
-  "scan",
-]);
+const LIBRARY_PATH_ACTIONS = new Set(["get", "set"]);
+const LIBRARY_REGISTRY_ACTIONS = new Set(["add", "list"]);
+const LIBRARY_SCOPE_ACTIONS = new Set(["get", "list", "remove"]);
 const LIBRARY_INDEX_ACTIONS = new Set(["disable", "enable", "get"]);
 const LIBRARY_QUERY_ACTIONS = new Set([
   "evidence",
@@ -78,16 +76,20 @@ export function parseLibraryUriFirstArguments(
     ((target.objectUri !== undefined && target.objectUri !== "wikg://index") ||
       values.query !== undefined)
       ? resolveImplicitLibraryQueryAction(target.objectUri, values.query)
-      : target.kind === "metadata" || target.objectUri === "wikg://index"
+      : target.kind === "metadata" ||
+          target.kind === "path" ||
+          target.kind === "archive" ||
+          target.kind === "archive-path" ||
+          target.objectUri === "wikg://index"
         ? "get"
-        : target.kind === "archive"
-          ? "get"
+        : target.kind === "archive-tree"
+          ? "archive-tree"
           : "list");
 
   if (action === "inspect" && target.kind !== "archive") {
     throw new Error(
       withHelpRoute(
-        "Library-level inspection is not supported. Inspect one managed archive with `wg wikg://lib/<archive-id> inspect`.",
+        "Library-level inspection is not supported. Inspect one managed archive with `wg wikg://lib/arc/<archive-id> inspect`.",
         formatWikiGraphHelpCommand(uri),
       ),
     );
@@ -100,6 +102,46 @@ export function parseLibraryUriFirstArguments(
   if (target.kind === "archive" && action === "inspect") {
     return parseLibraryArchiveInspectArguments(
       uri,
+      explicitAction === undefined ? [] : positionals.slice(2),
+      values,
+    );
+  }
+
+  if (target.kind === "registry") {
+    return parseLibraryRegistryArguments(
+      uri,
+      target,
+      action,
+      explicitAction === undefined ? [] : positionals.slice(2),
+      values,
+    );
+  }
+
+  if (target.kind === "path" || target.kind === "archive-path") {
+    return parseLibraryPathArguments(
+      uri,
+      target,
+      action,
+      explicitAction === undefined ? [] : positionals.slice(2),
+      values,
+    );
+  }
+
+  if (target.kind === "archive-tree") {
+    return parseLibraryArchiveTreeArguments(
+      uri,
+      target,
+      action,
+      explicitAction === undefined ? [] : positionals.slice(2),
+      values,
+    );
+  }
+
+  if (target.kind === "archive-collection") {
+    return parseLibraryArchiveCollectionArguments(
+      uri,
+      target,
+      action,
       explicitAction === undefined ? [] : positionals.slice(2),
       values,
     );
@@ -194,6 +236,38 @@ function parseLibraryHelpArguments(
     };
   }
 
+  if (
+    target.kind === "registry" ||
+    target.kind === "path" ||
+    target.kind === "archive-collection" ||
+    target.kind === "archive-tree" ||
+    target.kind === "archive-path"
+  ) {
+    if (explicitAction !== undefined && !isLibraryAction(action)) {
+      throw new Error(
+        withHelpRoute(
+          `The library URI target ${uri} does not support \`${action}\`.`,
+          formatWikiGraphHelpCommand(uri),
+        ),
+      );
+    }
+    if (isLibraryAction(action)) {
+      validateLibraryActionForTarget(uri, target, action);
+    }
+    return {
+      help: true,
+      helpText:
+        explicitAction === undefined
+          ? renderLibraryUriHelpText(uri, target)
+          : renderLibraryPredicateHelpText(
+              uri,
+              target,
+              action as LibraryHelpPredicateName,
+            ),
+      kind: "help",
+    };
+  }
+
   if (target.kind === "scope" && target.objectUri === "wikg://index") {
     if (explicitAction === undefined) {
       return {
@@ -233,7 +307,7 @@ function parseLibraryHelpArguments(
     if (isReadOnlyLibraryChapterHelpTarget(helpTarget)) {
       throw new Error(
         withHelpRoute(
-          `The library-wide chapter target ${uri} is read-only and does not support \`${action}\`. Use a standalone archive URI or a library archive shortcut such as wikg://lib/<archive-id>/chapter/... for chapter maintenance.`,
+          `The library-wide chapter target ${uri} is read-only and does not support \`${action}\`. Use a standalone archive URI or a library archive shortcut such as wikg://lib/arc/<archive-id>/chapter/... for chapter maintenance.`,
           formatWikiGraphHelpCommand(uri),
         ),
       );
@@ -478,6 +552,199 @@ function resolveImplicitLibraryQueryAction(
   return "get";
 }
 
+function parseLibraryRegistryArguments(
+  uri: string,
+  target: ParsedWikiGraphLibraryUri,
+  action: string,
+  tail: readonly string[],
+  values: ArchiveArgumentValues,
+): ParsedCLIArguments {
+  const helpRoute = formatWikiGraphHelpCommand(uri, action);
+  if (!LIBRARY_REGISTRY_ACTIONS.has(action)) {
+    throw new Error(
+      withHelpRoute(
+        `The library registry ${uri} does not support \`${action}\`.`,
+        helpRoute,
+      ),
+    );
+  }
+  rejectExtraPositionals(action, tail, 0, helpRoute);
+  rejectCommonLibraryFlags(action, values, helpRoute);
+  rejectArchiveFlag(action, "--input", values.input, helpRoute);
+  rejectArchiveFlag(action, "--to", values.to, helpRoute);
+  rejectArchiveFlag(action, "--json-input", values["json-input"], helpRoute);
+  rejectArchiveBooleanFlag(action, "--jsonl", values.jsonl, helpRoute);
+  if (action === "add") {
+    if (values.path === undefined) {
+      throw new Error(withHelpRoute("Missing --path <folder>.", helpRoute));
+    }
+    return {
+      args: { action: "create", json: values.json, path: values.path, target },
+      help: false,
+      kind: "library",
+    };
+  }
+  rejectArchiveFlag(action, "--path", values.path, helpRoute);
+  return {
+    args: { action: "list", json: values.json, target },
+    help: false,
+    kind: "library",
+  };
+}
+
+function parseLibraryPathArguments(
+  uri: string,
+  target: ParsedWikiGraphLibraryUri,
+  action: string,
+  tail: readonly string[],
+  values: ArchiveArgumentValues,
+): ParsedCLIArguments {
+  const helpRoute = formatWikiGraphHelpCommand(uri, action);
+  if (!LIBRARY_PATH_ACTIONS.has(action)) {
+    throw new Error(
+      withHelpRoute(
+        `The library path object ${uri} does not support \`${action}\`.`,
+        helpRoute,
+      ),
+    );
+  }
+  rejectCommonLibraryFlags(action, values, helpRoute);
+  rejectArchiveFlag(action, "--path", values.path, helpRoute);
+  rejectArchiveFlag(action, "--input", values.input, helpRoute);
+  rejectArchiveFlag(action, "--to", values.to, helpRoute);
+  rejectArchiveFlag(action, "--json-input", values["json-input"], helpRoute);
+  if (action === "get") {
+    rejectExtraPositionals(action, tail, 0, helpRoute);
+    rejectArchiveBooleanFlag(action, "--jsonl", values.jsonl, helpRoute);
+    return {
+      args: { action: "get", json: values.json, target },
+      help: false,
+      kind: "library",
+    };
+  }
+  rejectExtraPositionals(action, tail, 1, helpRoute);
+  if (tail[0] === undefined) {
+    throw new Error(withHelpRoute("Missing path value.", helpRoute));
+  }
+  if (target.kind === "archive-path") {
+    rejectArchiveBooleanFlag(action, "--jsonl", values.jsonl, helpRoute);
+    return {
+      args: { action: "move", json: values.json, target, to: tail[0] },
+      help: false,
+      kind: "library",
+    };
+  }
+  return {
+    args: {
+      action: "rebind",
+      json: values.json,
+      jsonl: values.jsonl,
+      path: tail[0],
+      target,
+    },
+    help: false,
+    kind: "library",
+  };
+}
+
+function parseLibraryArchiveCollectionArguments(
+  uri: string,
+  target: ParsedWikiGraphLibraryUri,
+  action: string,
+  tail: readonly string[],
+  values: ArchiveArgumentValues,
+): ParsedCLIArguments {
+  const helpRoute = formatWikiGraphHelpCommand(uri, action);
+  if (!LIBRARY_ARCHIVE_COLLECTION_ACTIONS.has(action)) {
+    throw new Error(
+      withHelpRoute(
+        `The archive member collection ${uri} does not support \`${action}\`.`,
+        helpRoute,
+      ),
+    );
+  }
+  rejectExtraPositionals(action, tail, 0, helpRoute);
+  rejectCommonLibraryFlags(action, values, helpRoute);
+  rejectArchiveFlag(action, "--path", values.path, helpRoute);
+  rejectArchiveFlag(action, "--json-input", values["json-input"], helpRoute);
+  if (action === "add") {
+    rejectArchiveBooleanFlag(action, "--jsonl", values.jsonl, helpRoute);
+    if (values.input === undefined) {
+      throw new Error(withHelpRoute("Missing --input <path>.", helpRoute));
+    }
+    return {
+      args: {
+        action: "add",
+        inputPath: values.input,
+        json: values.json,
+        target,
+        ...(values.to === undefined ? {} : { to: values.to }),
+      },
+      help: false,
+      kind: "library",
+    };
+  }
+  rejectArchiveFlag(action, "--input", values.input, helpRoute);
+  rejectArchiveFlag(action, "--to", values.to, helpRoute);
+  if (action === "list") {
+    rejectArchiveBooleanFlag(action, "--jsonl", values.jsonl, helpRoute);
+  }
+  return {
+    args: {
+      action: action as "list" | "scan",
+      json: values.json,
+      jsonl: values.jsonl,
+      target,
+    },
+    help: false,
+    kind: "library",
+  };
+}
+
+function parseLibraryArchiveTreeArguments(
+  uri: string,
+  target: ParsedWikiGraphLibraryUri,
+  action: string,
+  tail: readonly string[],
+  values: ArchiveArgumentValues,
+): ParsedCLIArguments {
+  const helpRoute = formatWikiGraphHelpCommand(uri, action);
+  if (!LIBRARY_ARCHIVE_TREE_ACTIONS.has(action)) {
+    throw new Error(
+      withHelpRoute(
+        `The archive member tree ${uri} is read-only and does not support \`${action}\`.`,
+        helpRoute,
+      ),
+    );
+  }
+  rejectExtraPositionals(action, tail, 0, helpRoute);
+  rejectCommonLibraryFlags(action, values, helpRoute);
+  rejectArchiveFlag(action, "--path", values.path, helpRoute);
+  rejectArchiveFlag(action, "--input", values.input, helpRoute);
+  rejectArchiveFlag(action, "--to", values.to, helpRoute);
+  rejectArchiveFlag(action, "--json-input", values["json-input"], helpRoute);
+  rejectArchiveBooleanFlag(action, "--jsonl", values.jsonl, helpRoute);
+  return {
+    args: {
+      action: "archive-tree",
+      ...(values.depth === undefined
+        ? {}
+        : {
+            depth: parseNonNegativeIntegerFlag(
+              values.depth,
+              "--depth",
+              helpRoute,
+            ),
+          }),
+      json: values.json,
+      ...(values.parent === undefined ? {} : { parent: values.parent }),
+      target,
+    },
+    help: false,
+    kind: "library",
+  };
+}
+
 function parseLibraryIndexArguments(
   uri: string,
   target: ParsedWikiGraphLibraryUri,
@@ -626,49 +893,12 @@ function parseLibraryScopeArguments(
   rejectArchiveFlag(action, "--json-input", values["json-input"], helpRoute);
 
   switch (action) {
-    case "add":
-      rejectExtraPositionals(action, tail, 0, helpRoute);
-      rejectArchiveFlag(action, "--path", values.path, helpRoute);
-      if (values.input === undefined) {
-        throw new Error(withHelpRoute("Missing --input <path>.", helpRoute));
-      }
-      return {
-        args: {
-          action,
-          inputPath: values.input,
-          json: values.json,
-          target,
-          ...(values.to === undefined ? {} : { to: values.to }),
-        },
-        help: false,
-        kind: "library",
-      };
-    case "create":
-      if (!target.isDefault) {
-        throw new Error(
-          withHelpRoute("Create libraries from wikg://lib.", helpRoute),
-        );
-      }
-      rejectExtraPositionals(action, tail, 0, helpRoute);
-      if (values.path === undefined) {
-        throw new Error(withHelpRoute("Missing --path <folder>.", helpRoute));
-      }
-      rejectArchiveFlag(action, "--input", values.input, helpRoute);
-      rejectArchiveFlag(action, "--to", values.to, helpRoute);
-      return {
-        args: { action, json: values.json, path: values.path, target },
-        help: false,
-        kind: "library",
-      };
     case "remove":
       rejectExtraPositionals(action, tail, 0, helpRoute);
       rejectArchiveFlag(action, "--path", values.path, helpRoute);
       rejectArchiveFlag(action, "--input", values.input, helpRoute);
       rejectArchiveFlag(action, "--to", values.to, helpRoute);
-      if (
-        (target.kind === "archive" || !target.isDefault) &&
-        values.confirm !== true
-      ) {
+      if (!target.isDefault && values.confirm !== true) {
         throw new Error(withHelpRoute("Missing --confirm.", helpRoute));
       }
       return {
@@ -681,23 +911,8 @@ function parseLibraryScopeArguments(
         help: false,
         kind: "library",
       };
-    case "rebind":
-      rejectExtraPositionals(action, tail, 0, helpRoute);
-      if (values.path === undefined) {
-        throw new Error(
-          withHelpRoute("Missing --path <directory>.", helpRoute),
-        );
-      }
-      rejectArchiveFlag(action, "--input", values.input, helpRoute);
-      rejectArchiveFlag(action, "--to", values.to, helpRoute);
-      return {
-        args: { action, json: values.json, path: values.path, target },
-        help: false,
-        kind: "library",
-      };
     case "get":
     case "list":
-    case "scan":
       rejectExtraPositionals(action, tail, 0, helpRoute);
       rejectArchiveFlag(action, "--path", values.path, helpRoute);
       rejectArchiveFlag(action, "--input", values.input, helpRoute);
@@ -715,8 +930,13 @@ function parseLibraryScopeArguments(
     case "get-index":
     case "clear":
     case "move":
+    case "archive-tree":
+    case "add":
+    case "create":
+    case "rebind":
+    case "scan":
       throw new Error(
-        "Internal error: metadata action routed to library scope.",
+        "Internal error: unsupported action routed to library scope.",
       );
   }
 }
@@ -796,6 +1016,7 @@ function parseLibraryMetadataArguments(
     case "enable-index":
     case "get-index":
     case "scan":
+    case "archive-tree":
       throw new Error(
         "Internal error: scope action routed to library metadata.",
       );
@@ -848,6 +1069,7 @@ function rejectExtraPositionals(
 function isLibraryAction(action: string): action is CLILibraryAction {
   return (
     action === "add" ||
+    action === "archive-tree" ||
     action === "clear" ||
     action === "create" ||
     action === "delete" ||
@@ -863,6 +1085,22 @@ function isLibraryAction(action: string): action is CLILibraryAction {
     action === "scan" ||
     action === "set"
   );
+}
+
+function validateTargetAction(
+  uri: string,
+  label: string,
+  actions: ReadonlySet<string>,
+  action: CLILibraryAction,
+): void {
+  if (!actions.has(action)) {
+    throw new Error(
+      withHelpRoute(
+        `The ${label} ${uri} does not support \`${action}\`.`,
+        formatWikiGraphHelpCommand(uri),
+      ),
+    );
+  }
 }
 
 function validateLibraryActionForTarget(
@@ -894,6 +1132,55 @@ function validateLibraryActionForTarget(
     }
     return;
   }
+  if (target.kind === "registry") {
+    validateTargetAction(
+      uri,
+      "library registry",
+      LIBRARY_REGISTRY_ACTIONS,
+      action,
+    );
+    return;
+  }
+
+  if (target.kind === "path") {
+    validateTargetAction(
+      uri,
+      "library path object",
+      LIBRARY_PATH_ACTIONS,
+      action,
+    );
+    return;
+  }
+
+  if (target.kind === "archive-collection") {
+    validateTargetAction(
+      uri,
+      "archive member collection",
+      LIBRARY_ARCHIVE_COLLECTION_ACTIONS,
+      action,
+    );
+    return;
+  }
+
+  if (target.kind === "archive-tree") {
+    validateTargetAction(
+      uri,
+      "archive member tree",
+      LIBRARY_ARCHIVE_TREE_ACTIONS,
+      action,
+    );
+    return;
+  }
+
+  if (target.kind === "archive-path") {
+    validateTargetAction(
+      uri,
+      "archive path object",
+      LIBRARY_ARCHIVE_PATH_ACTIONS,
+      action,
+    );
+    return;
+  }
 
   if (!LIBRARY_SCOPE_ACTIONS.has(action)) {
     throw new Error(
@@ -911,7 +1198,7 @@ function validateLibraryActionForTarget(
   if (action === "remove" && target.isDefault) {
     throw new Error(
       withHelpRoute(
-        "The default library cannot be removed. Use a non-default library URI such as wikg://lib/<lib-id>.lib for library registry removal.",
+        "The default library cannot be removed. Use a non-default library URI such as wikg://lib/<lib-id> for library registry removal.",
         helpRoute,
       ),
     );

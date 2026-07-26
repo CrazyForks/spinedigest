@@ -1,6 +1,8 @@
 import { isAbsolute, relative, resolve } from "path";
 import { homedir } from "os";
 
+import { RESERVED_LIBRARY_URI_SEGMENTS } from "../../../library/segments.js";
+
 export const WIKI_GRAPH_URI_PREFIX = "wikg://";
 export const WIKI_GRAPH_JOB_URI_PREFIX = "wikg://local/job";
 export const WIKI_GRAPH_ARCHIVE_EXTENSION = ".wikg";
@@ -66,7 +68,7 @@ function parseLibraryArchiveLocatorBody(
   body: string,
 ): LocatedWikiGraphUri | undefined {
   const match =
-    /^lib\/(?:(?<library>[^/]+\.lib)\/)?(?<archive>[^/.][^/]*)(?:\/(?<object>.*))?$/u.exec(
+    /^lib(?:\/(?<library>[^/.][^/]*))?\/arc\/(?<archive>[^/.][^/]*)(?:\/(?<object>.*))?$/u.exec(
       body,
     );
   const groups = match?.groups;
@@ -81,7 +83,7 @@ function parseLibraryArchiveLocatorBody(
   const library = groups?.library;
   const archivePath = `${WIKI_GRAPH_URI_PREFIX}lib/${
     library === undefined ? "" : `${library}/`
-  }${archive}`;
+  }arc/${archive}`;
   const objectPath = groups?.object;
 
   return {
@@ -93,13 +95,7 @@ function parseLibraryArchiveLocatorBody(
 }
 
 function isLibraryScopeSegment(segment: string): boolean {
-  return (
-    segment === "meta" ||
-    segment === "chapter" ||
-    segment === "chunk" ||
-    segment === "entity" ||
-    segment === "triple"
-  );
+  return RESERVED_LIBRARY_URI_SEGMENTS.has(segment);
 }
 
 function resolveArchivePath(archivePath: string): string {
