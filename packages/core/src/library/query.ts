@@ -20,8 +20,10 @@ import type {
   ArchiveEvidence,
   ArchiveEvidenceItem,
   ArchiveEvidenceOptions,
+  ArchiveFindEvidencePreview,
   ArchiveFindHit,
   ArchiveFindOptions,
+  ArchiveFindOrder,
   ArchiveFindResult,
   ArchiveLibrarySource,
   ArchiveListItem,
@@ -162,14 +164,13 @@ export async function readWikiGraphLibraryPage(
 
   const page = createMultiArchivePage(pages);
   if ((page.type === "entity" || page.type === "triple") && pages.length > 1) {
-    const evidence = await listWikiGraphLibraryEvidence(target, objectUri, {
-      ...createPageEvidenceOptions(options),
-      limit: Number.MAX_SAFE_INTEGER,
-    });
-
     return {
       ...page,
-      evidence: createEvidencePreview(evidence, options.evidenceLimit ?? 3),
+      evidence: combinePageEvidencePreviews(
+        pages,
+        options.evidenceLimit ?? 3,
+        options.order ?? "doc-asc",
+      ),
     };
   }
 
@@ -315,7 +316,6 @@ async function readIndexedArchiveResults<T>(
   }
 
   const results: T[] = [];
-
   for (const archiveId of archiveIds) {
     const archive = await getWikiGraphLibraryArchiveById(library, archiveId);
     if (!isReadableLibraryArchive(archive)) {
@@ -402,17 +402,36 @@ function createMultiArchivePage(pages: readonly ArchivePage[]): ArchivePage {
   return { ...page, sources };
 }
 
-function createPageEvidenceOptions(
-  options: Parameters<typeof readArchivePage>[2] = {},
-): ArchiveEvidenceOptions {
+function combinePageEvidencePreviews(
+  pages: readonly ArchivePage[],
+  limit: number,
+  order: ArchiveFindOrder,
+): ArchiveFindEvidencePreview {
+  const evidencePages = pages.flatMap((page) =>
+    page.type === "entity" || page.type === "triple" ? [page] : [],
+  );
+  const orderedPages =
+    order === "doc-desc" ? evidencePages.slice().reverse() : evidencePages;
+  const sources = orderedPages.flatMap((page) =>
+    page.evidence.sources.map((source) => ({
+      ...source,
+      ...(page.archiveId === undefined ? {} : { archiveId: page.archiveId }),
+      ...(page.libraryArchiveUri === undefined
+        ? {}
+        : { libraryArchiveUri: page.libraryArchiveUri }),
+    })),
+  );
+  const total = evidencePages.reduce(
+    (sum, page) => sum + page.evidence.total,
+    0,
+  );
+  const shown = Math.min(limit, sources.length);
+
   return {
-    ...(options.evidenceLimit === undefined
-      ? {}
-      : { limit: options.evidenceLimit }),
-    ...(options.order === undefined ? {} : { order: options.order }),
-    ...(options.sourceContext === undefined
-      ? {}
-      : { sourceContext: options.sourceContext }),
+    nextCursor: shown < total ? String(shown) : null,
+    shown,
+    sources: sources.slice(0, shown),
+    total,
   };
 }
 
@@ -451,18 +470,6 @@ function createRelatedResult(
     items: pageItems,
     limit,
     nextCursor: nextOffset < sorted.length ? String(nextOffset) : null,
-  };
-}
-
-function createEvidencePreview(evidence: ArchiveEvidence, limit: number) {
-  const sources = evidence.items.slice(0, limit);
-
-  return {
-    nextCursor:
-      sources.length < evidence.items.length ? String(sources.length) : null,
-    shown: sources.length,
-    sources,
-    total: evidence.items.length,
   };
 }
 
