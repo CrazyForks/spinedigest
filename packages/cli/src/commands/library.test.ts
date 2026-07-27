@@ -1,105 +1,88 @@
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   addWikiGraphLibraryArchive,
-  DirectoryDocument,
   parseWikiGraphLibraryUri,
-  TOC_FILE_VERSION,
-  writeWikgArchive,
-} from "wiki-graph-core";
-import {
-  getWikiGraphStateDirectoryPathForTesting,
-  setWikiGraphStateDirectoryPathForTesting,
-} from "../../../core/src/runtime/common/wiki-graph/dir.js";
+} from "../../../core/src/index.js";
+import { withWikiGraphStateDirectoryPathForTesting } from "../../../core/src/runtime/common/wiki-graph/dir.js";
 import { runLibraryCommand } from "./library.js";
-
-let previousStateDir: string | undefined;
-let tempDir: string;
-
-beforeEach(async () => {
-  previousStateDir = getWikiGraphStateDirectoryPathForTesting();
-  tempDir = await mkdtemp(join(tmpdir(), "wikigraph-cli-library-test-"));
-  setWikiGraphStateDirectoryPathForTesting(join(tempDir, "state"));
-});
-
-afterEach(async () => {
-  setWikiGraphStateDirectoryPathForTesting(previousStateDir);
-  await rm(tempDir, { force: true, recursive: true });
-});
+import { createEmptyArchive } from "./test-helpers.js";
 
 describe("library command", () => {
   it("filters archive tree by file parent without changing the display root", async () => {
-    const target = parseWikiGraphLibraryUri("wikg://lib");
-    expect(target).toBeDefined();
-    const source = join(tempDir, "source.wikg");
-    await createEmptyArchive(source);
-    const archive = await addWikiGraphLibraryArchive({
-      inputPath: source,
-      target: target!,
-      to: "nested/book.wikg",
-    });
-
-    await addWikiGraphLibraryArchive({
-      inputPath: source,
-      target: target!,
-      to: "other.wikg",
-    });
-
-    const output = await captureStdout(async () => {
-      await runLibraryCommand({
-        action: "archive-tree",
-        json: true,
-        parent: "nested/book.wikg",
-        target: { isDefault: true, kind: "archive-tree" },
+    await withLibraryCommandTestState(async (tempDir) => {
+      const target = parseWikiGraphLibraryUri("wikg://lib");
+      expect(target).toBeDefined();
+      const source = join(tempDir, "source.wikg");
+      await createEmptyArchive({ path: source, tempDir });
+      const archive = await addWikiGraphLibraryArchive({
+        inputPath: source,
+        target: target!,
+        to: "nested/book.wikg",
       });
-    });
 
-    expect(JSON.parse(output)).toStrictEqual({
-      items: [
-        {
-          children: [
-            {
-              children: [],
-              name: "book.wikg",
-              path: "nested/book.wikg",
-              uri: archive.uri,
-            },
-          ],
-          name: "nested",
-          path: "nested",
-        },
-      ],
-    });
-
-    const textOutput = await captureStdout(async () => {
-      await runLibraryCommand({
-        action: "archive-tree",
-        parent: "nested/book.wikg",
-        target: { isDefault: true, kind: "archive-tree" },
+      await addWikiGraphLibraryArchive({
+        inputPath: source,
+        target: target!,
+        to: "other.wikg",
       });
-    });
 
-    expect(textOutput).toBe(`└─ nested\n   └─ book.wikg (${archive.uri})\n`);
+      const output = await captureStdout(async () => {
+        await runLibraryCommand({
+          action: "archive-tree",
+          json: true,
+          parent: "nested/book.wikg",
+          target: { isDefault: true, kind: "archive-tree" },
+        });
+      });
+
+      expect(JSON.parse(output)).toStrictEqual({
+        items: [
+          {
+            children: [
+              {
+                children: [],
+                name: "book.wikg",
+                path: "nested/book.wikg",
+                uri: archive.uri,
+              },
+            ],
+            name: "nested",
+            path: "nested",
+          },
+        ],
+      });
+
+      const textOutput = await captureStdout(async () => {
+        await runLibraryCommand({
+          action: "archive-tree",
+          parent: "nested/book.wikg",
+          target: { isDefault: true, kind: "archive-tree" },
+        });
+      });
+
+      expect(textOutput).toBe(`└─ nested\n   └─ book.wikg (${archive.uri})\n`);
+    });
   });
 });
 
-async function createEmptyArchive(path: string): Promise<void> {
-  const sourceDir = await mkdtemp(join(tempDir, "wikg-source-"));
-  const document = await DirectoryDocument.open(sourceDir);
+async function withLibraryCommandTestState(
+  operation: (tempDir: string) => Promise<void>,
+): Promise<void> {
+  const tempDir = await mkdtemp(join(tmpdir(), "wikigraph-cli-library-test-"));
+
   try {
-    try {
-      await document.openSession(async (openedDocument) => {
-        await openedDocument.writeToc({ items: [], version: TOC_FILE_VERSION });
-      });
-    } finally {
-      await document.release();
-    }
-    await writeWikgArchive(sourceDir, path);
+    await withWikiGraphStateDirectoryPathForTesting(
+      join(tempDir, "state"),
+      async () => {
+        await operation(tempDir);
+      },
+    );
   } finally {
-    await rm(sourceDir, { force: true, recursive: true });
+    await rm(tempDir, { force: true, recursive: true });
   }
 }
 
