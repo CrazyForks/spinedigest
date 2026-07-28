@@ -2,9 +2,8 @@ import {
   listArchiveCollection,
   listArchiveEvidence,
   listRelatedArchiveObjects,
-  findWikiGraphLibraryArchiveMembers,
   findWikiGraphLibraryObjects,
-  listWikiGraphLibraryArchiveMembers,
+  formatWikiGraphLibraryUri,
   listRelatedWikiGraphLibraryObjects,
   listWikiGraphLibraryEvidence,
   listWikiGraphLibraryObjects,
@@ -61,6 +60,9 @@ export async function runArchiveCommand(
     libraryTarget?.kind === "scope" &&
     libraryTarget.objectUri !== "wikg://index" &&
     (libraryTarget.objectUri !== undefined ||
+      args.action === "related" ||
+      args.action === "evidence" ||
+      args.action === "pack" ||
       args.action === "search" ||
       args.action === "list")
   ) {
@@ -331,24 +333,27 @@ async function runLibraryIndexArchiveCommand(
   target: NonNullable<ReturnType<typeof parseWikiGraphLibraryUri>>,
 ): Promise<void> {
   const library = await resolveWikiGraphLibrary(target);
-  const objectUri =
-    target.objectUri === undefined && args.objectId === undefined
-      ? "wikg://"
-      : getObjectUri(args.objectId ?? args.archivePath);
+  const isLibraryRootCollection =
+    target.objectUri === undefined && args.objectId === undefined;
+  const objectUri = isLibraryRootCollection
+    ? undefined
+    : getObjectUri(args.objectId ?? args.archivePath);
   const context = {
     ...createArchiveOutputContext(args),
-    archiveKey: args.archivePath,
+    archiveKey: isLibraryRootCollection
+      ? `${formatWikiGraphLibraryUri(target.publicId)}#scope`
+      : args.archivePath,
     archivePath: args.archivePath,
     indexScope: { kind: "library-index" as const, libraryId: library.id },
   };
 
   switch (args.action) {
     case "search":
-      if (objectUri === "wikg://") {
+      if (objectUri === undefined) {
         if (args.all === true) {
           await writeAllFindHits(
             async (cursor) =>
-              await findWikiGraphLibraryArchiveMembers(target, args.query!, {
+              await findWikiGraphLibraryObjects(target, args.query!, {
                 ...createFindOptions(args),
                 ...(cursor === undefined ? {} : { cursor }),
               }),
@@ -358,7 +363,7 @@ async function runLibraryIndexArchiveCommand(
           return;
         }
         await writeFindHits(
-          await findWikiGraphLibraryArchiveMembers(
+          await findWikiGraphLibraryObjects(
             target,
             args.query!,
             createFindOptions(args),
@@ -396,16 +401,30 @@ async function runLibraryIndexArchiveCommand(
         ...context,
         continuationKind: "collection" as const,
       };
-      if (objectUri === "wikg://") {
+      if (objectUri === undefined) {
         if (args.all === true) {
-          await writeAllFindHits(
-            async (cursor) =>
-              createCollectionFindResult(
-                await listWikiGraphLibraryArchiveMembers(target, {
-                  ...createCollectionOptions(args),
-                  ...(cursor === undefined ? {} : { cursor }),
-                }),
-              ),
+          if (args.limit !== undefined) {
+            await writeAllFindHits(
+              async (cursor) =>
+                createCollectionFindResult(
+                  await listWikiGraphLibraryObjects(target, {
+                    ...createCollectionOptions(args),
+                    ...(cursor === undefined ? {} : { cursor }),
+                  }),
+                ),
+              listContext,
+              args.format ?? "text",
+            );
+            return;
+          }
+
+          await writeFindHitsWithoutContinuation(
+            createCollectionFindResult(
+              await listWikiGraphLibraryObjects(target, {
+                ...createCollectionOptions(args),
+                limit: ALL_COLLECTION_OUTPUT_LIMIT,
+              }),
+            ),
             listContext,
             args.format ?? "text",
           );
@@ -413,7 +432,7 @@ async function runLibraryIndexArchiveCommand(
         }
         await writeFindHits(
           createCollectionFindResult(
-            await listWikiGraphLibraryArchiveMembers(
+            await listWikiGraphLibraryObjects(
               target,
               createCollectionOptions(args),
             ),
@@ -465,6 +484,24 @@ async function runLibraryIndexArchiveCommand(
       return;
     }
     case "get": {
+      if (objectUri === undefined) {
+        const getContext = {
+          ...context,
+          continuationKind: "collection" as const,
+        };
+        await writeFindHits(
+          createCollectionFindResult(
+            await listWikiGraphLibraryObjects(
+              target,
+              createCollectionOptions(args),
+            ),
+          ),
+          getContext,
+          args.format ?? "text",
+        );
+        return;
+      }
+
       const evidenceLimit = getSingleObjectEvidenceLimit(args, objectUri);
       await writePage(
         await readWikiGraphLibraryPage(target, objectUri, {
@@ -481,15 +518,16 @@ async function runLibraryIndexArchiveCommand(
       return;
     }
     case "related": {
+      const concreteObjectUri = requireLibraryObjectUri("related", objectUri);
       const relatedContext = {
         ...context,
         continuationKind: "related" as const,
-        targetUri: objectUri,
+        targetUri: concreteObjectUri,
       };
       const readPage = async (
         cursor: string | undefined,
       ): Promise<ArchiveRelatedResult> =>
-        await listRelatedWikiGraphLibraryObjects(target, objectUri, {
+        await listRelatedWikiGraphLibraryObjects(target, concreteObjectUri, {
           ...(cursor === undefined ? {} : { cursor }),
           ...createOptionalEvidenceLimit(args),
           ...(args.limit === undefined ? {} : { limit: args.limit }),
@@ -517,16 +555,17 @@ async function runLibraryIndexArchiveCommand(
       return;
     }
     case "evidence": {
+      const concreteObjectUri = requireLibraryObjectUri("evidence", objectUri);
       const evidenceContext = {
         ...context,
         continuationKind: "evidence" as const,
-        targetUri: objectUri,
+        targetUri: concreteObjectUri,
       };
 
       if (args.all === true) {
         await writeAllEvidence(
           async (cursor) =>
-            await listWikiGraphLibraryEvidence(target, objectUri, {
+            await listWikiGraphLibraryEvidence(target, concreteObjectUri, {
               ...(cursor === undefined ? {} : { cursor }),
               ...(args.limit === undefined ? {} : { limit: args.limit }),
               ...(args.reverse === true ? { order: "doc-desc" } : {}),
@@ -540,7 +579,7 @@ async function runLibraryIndexArchiveCommand(
       }
 
       await writeEvidence(
-        await listWikiGraphLibraryEvidence(target, objectUri, {
+        await listWikiGraphLibraryEvidence(target, concreteObjectUri, {
           ...(args.cursor === undefined ? {} : { cursor: args.cursor }),
           ...(args.limit === undefined ? {} : { limit: args.limit }),
           ...(args.reverse === true ? { order: "doc-desc" } : {}),
@@ -552,17 +591,19 @@ async function runLibraryIndexArchiveCommand(
       );
       return;
     }
-    case "pack":
+    case "pack": {
+      const concreteObjectUri = requireLibraryObjectUri("pack", objectUri);
       await writePack(
         await packWikiGraphLibraryContext(
           target,
-          objectUri,
+          concreteObjectUri,
           args.budget ?? 5000,
         ),
         context,
         args.format ?? "text",
       );
       return;
+    }
     case "create":
     case "export":
     case "inspect":
@@ -571,4 +612,17 @@ async function runLibraryIndexArchiveCommand(
         `The library index scope does not support \`${args.action}\`.`,
       );
   }
+}
+
+function requireLibraryObjectUri(
+  action: "related" | "evidence" | "pack",
+  objectUri: string | undefined,
+): string {
+  if (objectUri === undefined) {
+    throw new Error(
+      `The library \`${action}\` predicate requires a concrete library object URI.`,
+    );
+  }
+
+  return objectUri;
 }

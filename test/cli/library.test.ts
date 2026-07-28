@@ -6,6 +6,7 @@ import type * as WikiGraphCore from "wiki-graph-core";
 const libraryMockState = vi.hoisted(() => ({
   archives: [] as unknown[],
   metadata: {} as Record<string, unknown>,
+  objects: [] as unknown[],
   putCalls: [] as unknown[],
   textWrites: [] as string[],
 }));
@@ -21,6 +22,24 @@ vi.mock("wiki-graph-core", async (importOriginal) => {
     ),
     listWikiGraphLibraryArchives: vi.fn(() =>
       Promise.resolve(libraryMockState.archives),
+    ),
+    listWikiGraphLibraryObjects: vi.fn(() =>
+      Promise.resolve({
+        chapters: null,
+        ids: null,
+        items: libraryMockState.objects,
+        limit: 20,
+        nextCursor: null,
+        order: "doc-asc",
+        types: null,
+      }),
+    ),
+    resolveWikiGraphLibrary: vi.fn((target: { kind: string }) =>
+      Promise.resolve({
+        id: target.kind === "scope" ? 42 : 7,
+        isDefault: true,
+        publicId: target.kind === "scope" ? undefined : "book",
+      }),
     ),
     scanWikiGraphLibrary: vi.fn(() =>
       Promise.resolve({ archives: libraryMockState.archives }),
@@ -48,12 +67,16 @@ vi.mock("../../packages/cli/src/support/index.js", async (importOriginal) => {
 });
 
 import { parseCLIArguments } from "../../packages/cli/src/args/index.js";
-import { runLibraryCommand } from "../../packages/cli/src/commands/index.js";
+import {
+  runArchiveCommand,
+  runLibraryCommand,
+} from "../../packages/cli/src/commands/index.js";
 
 describe("cli/library args", () => {
   beforeEach(() => {
     libraryMockState.archives = [];
     libraryMockState.metadata = {};
+    libraryMockState.objects = [];
     libraryMockState.putCalls.length = 0;
     libraryMockState.textWrites.length = 0;
   });
@@ -352,6 +375,15 @@ describe("cli/library args", () => {
   });
 
   it("rejects reverse query combinations for library query predicates", () => {
+    expect(() => parseCLIArguments(["wikg://lib", "related"])).toThrow(
+      "The library `related` predicate requires a concrete library object URI.",
+    );
+    expect(() => parseCLIArguments(["wikg://lib/team", "evidence"])).toThrow(
+      "The library `evidence` predicate requires a concrete library object URI.",
+    );
+    expect(() => parseCLIArguments(["wikg://lib", "pack"])).toThrow(
+      "The library `pack` predicate requires a concrete library object URI.",
+    );
     expect(() =>
       parseCLIArguments([
         "wikg://lib/entity/Q1",
@@ -440,7 +472,45 @@ describe("cli/library args", () => {
     });
   });
 
-  it("lists archive members from the library scope root", async () => {
+  it("lists library-wide objects from the library scope root", async () => {
+    libraryMockState.objects = [
+      {
+        archiveId: 7,
+        field: "metadata",
+        id: "wikg://entity/Q7",
+        libraryArchiveUri: "wikg://lib/arc/book",
+        snippet: "Entity 7",
+        title: "Entity 7",
+        type: "meta",
+      },
+    ];
+
+    await runLibraryCommand({
+      action: "get",
+      json: true,
+      target: { isDefault: true, kind: "scope" },
+    });
+
+    const output = JSON.parse(libraryMockState.textWrites[0] ?? "{}") as {
+      objects: Array<Record<string, unknown>>;
+    };
+    expect(output).toMatchObject({
+      objects: [
+        {
+          archiveId: 7,
+          libraryArchiveUri: "wikg://lib/arc/book",
+          text: "Entity 7",
+          title: "Entity 7",
+          type: "meta",
+          uri: "wikg://entity/Q7",
+        },
+      ],
+    });
+    expect(output.objects[0]).not.toHaveProperty("relativePath");
+    expect(output.objects[0]).not.toHaveProperty("status");
+  });
+
+  it("lists archive members from the library archive collection root", async () => {
     libraryMockState.archives = [
       {
         uri: "wikg://lib/arc/book",
@@ -456,19 +526,36 @@ describe("cli/library args", () => {
     await runLibraryCommand({
       action: "get",
       json: true,
-      target: { isDefault: true, kind: "scope" },
+      target: { isDefault: true, kind: "archive-collection" },
     });
 
     expect(JSON.parse(libraryMockState.textWrites[0] ?? "{}")).toMatchObject({
       items: [
         {
           uri: "wikg://lib/arc/book",
-          id: "book",
           relativePath: "books/book.wikg",
           status: "present",
         },
       ],
     });
+  });
+
+  it("rejects library object predicates without a concrete object URI", async () => {
+    await expect(
+      runArchiveCommand({ action: "related", archivePath: "wikg://lib" }),
+    ).rejects.toThrow(
+      "The library `related` predicate requires a concrete library object URI.",
+    );
+    await expect(
+      runArchiveCommand({ action: "evidence", archivePath: "wikg://lib/team" }),
+    ).rejects.toThrow(
+      "The library `evidence` predicate requires a concrete library object URI.",
+    );
+    await expect(
+      runArchiveCommand({ action: "pack", archivePath: "wikg://lib" }),
+    ).rejects.toThrow(
+      "The library `pack` predicate requires a concrete library object URI.",
+    );
   });
 
   it("renders archive member pages with business entry links and diagnostic metadata", async () => {
