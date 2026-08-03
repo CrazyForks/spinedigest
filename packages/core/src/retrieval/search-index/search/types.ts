@@ -50,11 +50,28 @@ export interface SearchIndexInput {
   readonly textSentences: readonly TextSentenceRecordInput[];
 }
 
+export type SearchIndexSelection = "auto" | "dense" | "fts" | "fts,dense";
+
+export interface SearchIndexEmbeddingProvider {
+  readonly dimensions?: number;
+  readonly model: string;
+  embedTexts(texts: readonly string[]): Promise<{
+    readonly embeddings: readonly (readonly number[])[];
+    readonly tokens?: number;
+  }>;
+}
+
+export interface SearchIndexBuildOptions {
+  readonly embeddingProvider?: SearchIndexEmbeddingProvider;
+  readonly indexes?: SearchIndexSelection;
+}
+
 export type SearchIndexProgressPhase =
   | "checking"
   | "clearing"
   | "collecting"
   | "finalizing"
+  | "indexing-dense"
   | "indexing-objects"
   | "indexing-text";
 
@@ -62,7 +79,7 @@ export interface SearchIndexProgressEvent {
   readonly done?: number;
   readonly phase: SearchIndexProgressPhase;
   readonly total?: number;
-  readonly unit?: "chapter" | "object" | "sentence";
+  readonly unit?: "chapter" | "object" | "sentence" | "vector";
 }
 
 export type SearchIndexProgressReporter = (
@@ -70,6 +87,15 @@ export type SearchIndexProgressReporter = (
 ) => void | Promise<void>;
 
 export type SearchIndexStatus = "current" | "dirty" | "missing";
+
+export interface SearchIndexCapabilityStatus {
+  readonly dense: {
+    readonly current: boolean;
+    readonly dimensions?: number;
+    readonly model?: string;
+  };
+  readonly indexes: "dense" | "fts" | "fts,dense" | "missing";
+}
 
 export interface SearchIndexTextHit {
   readonly archiveId: number;
@@ -96,10 +122,17 @@ export interface SearchIndexQueryResult {
   readonly textHits: readonly SearchIndexTextHit[];
 }
 
-export const SEARCH_INDEX_VERSION = "4";
+export const SEARCH_INDEX_VERSION = "6";
 export const SEARCH_INDEX_FTS_HIT_LIMIT = 32_000;
+export const SEARCH_INDEX_DENSE_SEGMENT_HIT_LIMIT = 256;
+export const SEARCH_INDEX_DENSE_EXPANDED_SENTENCE_LIMIT = 1_024;
 export const FTS5_RANK_SCORE_SCALE = 1_000_000;
 export const TIER_WEIGHTS = [1, 0.45, 0.08] as const;
+
+export const DENSE_SEGMENT_TARGET_WORDS = 300;
+export const DENSE_SEGMENT_MAX_WORDS = 420;
+export const DENSE_SEGMENT_OVERLAP_WORDS = 80;
+export const DENSE_SEGMENT_MIN_WORDS = 80;
 
 export interface ArchiveIndexSettings {
   readonly ftsEmbedded: boolean;

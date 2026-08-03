@@ -1,7 +1,9 @@
 import {
   deleteArchiveSearchSessions,
   isArchiveSearchIndexCurrent,
+  readSearchIndexCapabilityStatus,
   rebuildArchiveSearchIndex,
+  type SearchIndexBuildOptions,
 } from "wiki-graph-core";
 import { readArchiveIndexSettings, setFtsIndexEmbedded } from "wiki-graph-core";
 import { WikiGraphArchiveFile } from "wiki-graph-core";
@@ -13,6 +15,8 @@ import {
   ProgressOutputWriter,
   type ProgressCounter,
 } from "../../runtime/index.js";
+import { loadCLIConfig } from "../../runtime/config.js";
+import { buildSearchIndexEmbeddingProvider } from "../../runtime/embedding.js";
 import { writeArchiveDocument } from "./run/document.js";
 import { resolveArchiveRuntimeLocation } from "./run/uri.js";
 
@@ -48,15 +52,16 @@ async function readIndexSettings(
     async (document) => {
       const settings = await readArchiveIndexSettings(document);
 
-      await writeIndexOutput(args, {
-        ftsEmbedded: settings.ftsEmbedded,
-        ftsCurrent: await isArchiveSearchIndexCurrent(document),
-      });
+      await writeIndexOutput(
+        args,
+        await readIndexOutputPayload(document, settings.ftsEmbedded),
+      );
     },
   );
 }
 
 async function enableIndex(args: CLIArchiveIndexArguments): Promise<void> {
+  const buildOptions = await createSearchIndexBuildOptions(args.indexes);
   const writer = new ProgressOutputWriter({
     jsonl: args.jsonl ?? false,
     throttleMs: INDEX_PROGRESS_OUTPUT_INTERVAL_MS,
@@ -68,7 +73,7 @@ async function enableIndex(args: CLIArchiveIndexArguments): Promise<void> {
       await writer.write({
         json: { type: "started" },
         kind: "lifecycle",
-        text: "index enable started\nsteps: checking -> collecting -> clearing -> indexing-text -> indexing-objects -> finalizing",
+        text: `index enable started\nindexes: ${buildOptions.indexes ?? "auto"}\nsteps: ${formatIndexEnableSteps(buildOptions).join(" -> ")}`,
       });
       await writer.write({
         json: { phase: "checking", type: "status_snapshot" },
@@ -76,31 +81,35 @@ async function enableIndex(args: CLIArchiveIndexArguments): Promise<void> {
         phase: "checking",
       });
 
-      if (await isArchiveSearchIndexCurrent(document)) {
+      if (await isRequestedSearchIndexAlreadyCurrent(document, buildOptions)) {
         await writer.write({
           json: { type: "already-current" },
           kind: "lifecycle",
           text: "already current",
         });
       } else {
-        await rebuildArchiveSearchIndex(document, async (event) => {
-          await writer.write({
-            counters:
-              event.done === undefined || event.total === undefined
-                ? []
-                : [formatIndexCounter(event)],
-            json: {
+        await rebuildArchiveSearchIndex(
+          document,
+          async (event) => {
+            await writer.write({
               counters:
                 event.done === undefined || event.total === undefined
                   ? []
                   : [formatIndexCounter(event)],
+              json: {
+                counters:
+                  event.done === undefined || event.total === undefined
+                    ? []
+                    : [formatIndexCounter(event)],
+                phase: event.phase,
+                type: "status_snapshot",
+              },
+              kind: "status",
               phase: event.phase,
-              type: "status_snapshot",
-            },
-            kind: "status",
-            phase: event.phase,
-          });
-        });
+            });
+          },
+          buildOptions,
+        );
       }
 
       await writer.write({
@@ -123,6 +132,79 @@ async function enableIndex(args: CLIArchiveIndexArguments): Promise<void> {
   await deleteArchiveSearchSessions(args.archivePath);
 }
 
+async function isRequestedSearchIndexAlreadyCurrent(
+  document: Parameters<typeof isArchiveSearchIndexCurrent>[0],
+  options: SearchIndexBuildOptions,
+): Promise<boolean> {
+  if (!(await isArchiveSearchIndexCurrent(document))) {
+    return false;
+  }
+
+  const capabilities = await readSearchIndexCapabilityStatus(document);
+
+  if (options.indexes === "fts") {
+    return capabilities.indexes === "fts";
+  }
+  if (options.embeddingProvider === undefined) {
+    return capabilities.indexes === "fts";
+  }
+
+  if (options.indexes === "dense") {
+    return (
+      capabilities.indexes === "dense" &&
+      capabilities.dense.current &&
+      (options.embeddingProvider.dimensions === undefined ||
+        capabilities.dense.dimensions === options.embeddingProvider.dimensions)
+    );
+  }
+
+  return (
+    capabilities.indexes === "fts,dense" &&
+    capabilities.dense.current &&
+    capabilities.dense.model === options.embeddingProvider.model &&
+    (options.embeddingProvider.dimensions === undefined ||
+      capabilities.dense.dimensions === options.embeddingProvider.dimensions)
+  );
+}
+
+async function createSearchIndexBuildOptions(
+  indexes: CLIArchiveIndexArguments["indexes"],
+): Promise<SearchIndexBuildOptions> {
+  if (indexes === "fts") {
+    return { indexes };
+  }
+
+  const config = await loadCLIConfig();
+
+  if (config.embedding === undefined) {
+    if (indexes === "dense" || indexes === "fts,dense") {
+      throw new Error(
+        `Missing embeddings configuration. Configure \`wikg://local/config/embeddings\` before using --indexes ${indexes}.`,
+      );
+    }
+    return { indexes: indexes ?? "auto" };
+  }
+
+  return {
+    embeddingProvider: buildSearchIndexEmbeddingProvider(config.embedding),
+    indexes: indexes ?? "auto",
+  };
+}
+
+function formatIndexEnableSteps(
+  options: SearchIndexBuildOptions,
+): readonly string[] {
+  return [
+    "checking",
+    "collecting",
+    "clearing",
+    "indexing-text",
+    "indexing-objects",
+    ...(options.embeddingProvider === undefined ? [] : ["indexing-dense"]),
+    "finalizing",
+  ];
+}
+
 async function embedIndex(args: CLIArchiveIndexArguments): Promise<void> {
   let built = false;
 
@@ -141,9 +223,8 @@ async function embedIndex(args: CLIArchiveIndexArguments): Promise<void> {
         built = true;
       }
       await writeIndexOutput(args, {
+        ...(await readIndexOutputPayload(document, true)),
         built,
-        ftsEmbedded: true,
-        ftsCurrent: await isArchiveSearchIndexCurrent(document),
       });
     },
     { searchIndexWritebackPolicy: "archive" },
@@ -158,6 +239,7 @@ async function externalizeIndex(args: CLIArchiveIndexArguments): Promise<void> {
       await setFtsIndexEmbedded(document, false);
       await document.deleteSearchIndexDatabase();
       await writeIndexOutput(args, {
+        capabilities: { dense: { current: false }, indexes: "missing" },
         ftsEmbedded: false,
         ftsCurrent: false,
       });
@@ -175,6 +257,7 @@ async function disableIndex(args: CLIArchiveIndexArguments): Promise<void> {
       const settings = await readArchiveIndexSettings(document);
 
       await writeIndexOutput(args, {
+        capabilities: { dense: { current: false }, indexes: "missing" },
         ftsEmbedded: settings.ftsEmbedded,
         ftsCurrent: false,
       });
@@ -203,10 +286,34 @@ async function readSearchIndexWritebackPolicy(
   return embedded ? "archive" : "cache";
 }
 
+async function readIndexOutputPayload(
+  document: Parameters<typeof isArchiveSearchIndexCurrent>[0],
+  ftsEmbedded: boolean,
+): Promise<{
+  readonly capabilities: Awaited<
+    ReturnType<typeof readSearchIndexCapabilityStatus>
+  >;
+  readonly ftsCurrent: boolean;
+  readonly ftsEmbedded: boolean;
+}> {
+  const [capabilities, indexCurrent] = await Promise.all([
+    readSearchIndexCapabilityStatus(document),
+    isArchiveSearchIndexCurrent(document),
+  ]);
+
+  return {
+    capabilities,
+    ftsEmbedded,
+    ftsCurrent:
+      indexCurrent &&
+      (capabilities.indexes === "fts" || capabilities.indexes === "fts,dense"),
+  };
+}
+
 function formatIndexCounter(input: {
   readonly done?: number;
   readonly total?: number;
-  readonly unit?: "chapter" | "object" | "sentence";
+  readonly unit?: "chapter" | "object" | "sentence" | "vector";
 }): ProgressCounter {
   return {
     done: input.done ?? 0,
@@ -217,7 +324,7 @@ function formatIndexCounter(input: {
 }
 
 function formatIndexCounterName(
-  unit: "chapter" | "object" | "sentence" | undefined,
+  unit: "chapter" | "object" | "sentence" | "vector" | undefined,
 ): string {
   switch (unit) {
     case "chapter":
@@ -226,13 +333,15 @@ function formatIndexCounterName(
       return "objects";
     case "sentence":
       return "sentences";
+    case "vector":
+      return "vectors";
     case undefined:
       return "items";
   }
 }
 
 function formatIndexUnit(
-  unit: "chapter" | "object" | "sentence" | undefined,
+  unit: "chapter" | "object" | "sentence" | "vector" | undefined,
 ): string {
   switch (unit) {
     case "chapter":
@@ -241,6 +350,8 @@ function formatIndexUnit(
       return "objects";
     case "sentence":
       return "sentences";
+    case "vector":
+      return "vectors";
     case undefined:
       return "items";
   }
@@ -250,6 +361,9 @@ async function writeIndexOutput(
   args: CLIArchiveIndexArguments,
   payload: {
     readonly built?: boolean;
+    readonly capabilities: Awaited<
+      ReturnType<typeof readSearchIndexCapabilityStatus>
+    >;
     readonly ftsCurrent: boolean;
     readonly ftsEmbedded: boolean;
   },
@@ -261,8 +375,16 @@ async function writeIndexOutput(
 
   await writeTextToStdout(
     [
+      `Enabled indexes: ${payload.capabilities.indexes}`,
       `FTS embedded: ${payload.ftsEmbedded ? "yes" : "no"}`,
       `FTS current: ${payload.ftsCurrent ? "yes" : "no"}`,
+      `Dense current: ${payload.capabilities.dense.current ? "yes" : "no"}`,
+      ...(payload.capabilities.dense.model === undefined
+        ? []
+        : [`Dense model: ${payload.capabilities.dense.model}`]),
+      ...(payload.capabilities.dense.dimensions === undefined
+        ? []
+        : [`Dense dimensions: ${payload.capabilities.dense.dimensions}`]),
       ...(payload.built === undefined
         ? []
         : [`Built: ${payload.built ? "yes" : "no"}`]),

@@ -4,6 +4,7 @@ import type { Database } from "wiki-graph-core";
 
 export const LOCAL_CONFIG_SECTIONS = [
   "concurrent",
+  "embeddings",
   "llm",
   "wikispine",
 ] as const;
@@ -81,6 +82,10 @@ export async function clearLocalConfigSection(
 export function parseLocalConfigSection(
   value: string | undefined,
 ): LocalConfigSection | undefined {
+  if (value === "embedding") {
+    return "embeddings";
+  }
+
   return LOCAL_CONFIG_SECTIONS.find((section) => section === value);
 }
 
@@ -88,7 +93,10 @@ export function maskLocalConfigSection(
   section: LocalConfigSection,
   value: LocalConfigObject,
 ): LocalConfigObject {
-  if (section !== "llm" || value.apiKey === undefined) {
+  if (
+    (section !== "llm" && section !== "embeddings") ||
+    value.apiKey === undefined
+  ) {
     return value;
   }
 
@@ -118,6 +126,16 @@ export function normalizeLocalConfigKey(
         return normalized;
     }
   }
+  if (section === "embeddings") {
+    switch (normalized) {
+      case "api-key":
+        return "apiKey";
+      case "base-url":
+        return "baseURL";
+      default:
+        return normalized;
+    }
+  }
   return normalized;
 }
 
@@ -126,6 +144,8 @@ export function validateLocalConfigSection(
   value: LocalConfigObject,
 ): LocalConfigObject {
   switch (section) {
+    case "embeddings":
+      return validateEmbeddingsConfig(value);
     case "llm":
       return validateLLMConfig(value);
     case "concurrent":
@@ -201,6 +221,51 @@ function parseSectionJSON(
   }
 
   return validateLocalConfigSection(section, parsed as LocalConfigObject);
+}
+
+function validateEmbeddingsConfig(value: LocalConfigObject): LocalConfigObject {
+  const allowedKeys = new Set([
+    "apiKey",
+    "baseURL",
+    "dimensions",
+    "model",
+    "name",
+    "provider",
+  ]);
+  const allowedProviders = new Set(["openai", "openai-compatible"]);
+  const next: Record<string, unknown> = {};
+
+  for (const [key, entry] of Object.entries(value)) {
+    if (!allowedKeys.has(key)) {
+      throw new Error(`Unknown embeddings config key: ${key}`);
+    }
+    if (key === "dimensions") {
+      const parsed =
+        typeof entry === "number"
+          ? entry
+          : typeof entry === "string"
+            ? Number(entry)
+            : NaN;
+
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error("embeddings.dimensions must be a positive integer.");
+      }
+      next[key] = parsed;
+      continue;
+    }
+    if (typeof entry !== "string" || entry.trim() === "") {
+      throw new Error(`embeddings.${key} must be a non-empty string.`);
+    }
+    const normalized = entry.trim();
+
+    if (key === "provider" && !allowedProviders.has(normalized)) {
+      throw new Error(`Unknown embeddings.provider: ${normalized}`);
+    }
+
+    next[key] = normalized;
+  }
+
+  return next;
 }
 
 function validateLLMConfig(value: LocalConfigObject): LocalConfigObject {

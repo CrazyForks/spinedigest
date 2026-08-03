@@ -17,10 +17,14 @@ import {
   finalizeSearchIndexReplacement,
   prepareSearchIndexReplacement,
   readSearchIndexFingerprintFromDatabase,
+  readSearchIndexCapabilityStatus,
   readSearchIndexStatus,
   SEARCH_OBJECT_PROPERTY_KIND,
   SEARCH_OBJECT_PROPERTY_OWNER_KIND,
   type SearchIndexObjectHit,
+  type SearchIndexBuildOptions,
+  type SearchIndexCapabilityStatus,
+  type SearchIndexEmbeddingProvider,
   type SearchIndexProgressReporter,
   type SearchIndexTextHit,
   type SearchIndexWriteCounters,
@@ -28,6 +32,7 @@ import {
   type SearchObjectPropertyOwnerKind,
   type TextSentenceKind,
   writeSearchIndexBatch,
+  writeSearchIndexDenseSegments,
 } from "../retrieval/search-index/index.js";
 import { readPathSize } from "../runtime/gc/files.js";
 import type { GcContext, GcJobResult } from "../runtime/gc/index.js";
@@ -63,6 +68,7 @@ export interface WikiGraphLibraryIndexSource {
 }
 
 export interface WikiGraphLibraryIndexState {
+  readonly capabilities?: SearchIndexCapabilityStatus;
   readonly enabled: boolean;
   readonly fingerprint?: string;
   readonly sourceFingerprint: string;
@@ -82,6 +88,7 @@ export interface WikiGraphLibraryIndexListOptions {
 
 export interface WikiGraphLibraryIndexQueryOptions {
   readonly chapters?: readonly number[];
+  readonly embeddingProvider?: SearchIndexEmbeddingProvider;
   readonly match?: ArchiveFindMatch;
   readonly objectHitLimit?: number;
   readonly textAfter?: {
@@ -132,8 +139,10 @@ export async function readWikiGraphLibraryIndexState(
       sourceFingerprint: await readStateValue(database, "sourceFingerprint"),
     }),
   );
+  const capabilities = await readSearchIndexCapabilityStatus(document);
 
   return {
+    capabilities,
     enabled,
     ...(databaseState.fingerprint === undefined
       ? {}
@@ -151,6 +160,7 @@ export async function readWikiGraphLibraryIndexState(
 export async function rebuildWikiGraphLibraryIndex(
   target: ParsedWikiGraphLibraryUri,
   progress?: SearchIndexProgressReporter,
+  options: SearchIndexBuildOptions = {},
 ): Promise<WikiGraphLibraryIndexState> {
   const library = await resolveWikiGraphLibrary(target);
 
@@ -171,6 +181,7 @@ export async function rebuildWikiGraphLibraryIndex(
       present,
       indexFingerprint,
       progress,
+      options,
     );
     await document.writeSearchIndexDatabase(async (database) => {
       await setStateValue(database, "sourceFingerprint", sourceFingerprint);
@@ -465,11 +476,17 @@ async function replaceLibrarySearchIndex(
   archives: readonly WikiGraphLibraryArchiveRecord[],
   fingerprint: string,
   progress?: SearchIndexProgressReporter,
+  options: SearchIndexBuildOptions = {},
 ): Promise<void> {
   await document.writeSearchIndexDatabase(async (database) => {
     await prepareSearchIndexReplacement(database, progress);
 
-    let counters: SearchIndexWriteCounters = { objectDone: 0, textDone: 0 };
+    let counters: SearchIndexWriteCounters = {
+      denseDone: 0,
+      denseRecords: [],
+      objectDone: 0,
+      textDone: 0,
+    };
     for (const archive of archives) {
       await new WikiGraphArchiveFile(archive.path).readDocument(
         async (archiveDocument) => {
@@ -482,13 +499,27 @@ async function replaceLibrarySearchIndex(
               batch,
               counters,
               progress,
+              options,
             );
           }
         },
       );
     }
+    counters = await writeSearchIndexDenseSegments(
+      database,
+      counters,
+      progress,
+      options,
+    );
 
-    await finalizeSearchIndexReplacement(database, fingerprint, 0, progress);
+    await finalizeSearchIndexReplacement(
+      database,
+      fingerprint,
+      0,
+      progress,
+      options.indexes,
+      options,
+    );
   });
 }
 
@@ -622,7 +653,7 @@ function createLibraryIndexDirectory(library: WikiGraphLibraryRecord): string {
 function createLibraryIndexDatabasePath(
   library: WikiGraphLibraryRecord,
 ): string {
-  return join(createLibraryIndexDirectory(library), "fts.db");
+  return join(createLibraryIndexDirectory(library), "index.db");
 }
 
 function createDisabledPath(library: WikiGraphLibraryRecord): string {

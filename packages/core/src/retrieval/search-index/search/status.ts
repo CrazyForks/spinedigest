@@ -5,7 +5,11 @@ import {
   createSearchIndexFingerprint,
   readSearchIndexFingerprintFromDatabase,
 } from "./fingerprint.js";
-import type { SearchIndexInput, SearchIndexStatus } from "./types.js";
+import type {
+  SearchIndexCapabilityStatus,
+  SearchIndexInput,
+  SearchIndexStatus,
+} from "./types.js";
 
 export async function isSearchIndexCurrent(
   document: ReadonlyDocument,
@@ -47,6 +51,57 @@ export async function readSearchIndexStatus(
   }
 }
 
+export async function readSearchIndexCapabilityStatus(document: {
+  readSearchIndexDatabase<T>(
+    operation: (database: Database) => Promise<T> | T,
+  ): Promise<T>;
+}): Promise<SearchIndexCapabilityStatus> {
+  try {
+    return await document.readSearchIndexDatabase(async (database) => {
+      const indexes = await readStateValue(database, "indexes");
+      const current = await isSearchIndexDatabaseCurrent(database);
+
+      if (indexes !== "dense" && indexes !== "fts,dense") {
+        return {
+          dense: { current: false },
+          indexes: indexes === "missing" ? "missing" : "fts",
+        };
+      }
+
+      const segmentCount = await countRows(database, "text_embedding_segments");
+      const dimensions = parseOptionalPositiveInteger(
+        await readStateValue(database, "embeddingDimensions"),
+      );
+      const model = await readStateValue(database, "embeddingModel");
+
+      return {
+        dense: {
+          current: current && segmentCount > 0,
+          ...(dimensions === undefined ? {} : { dimensions }),
+          ...(model === undefined || model === "" ? {} : { model }),
+        },
+        indexes,
+      };
+    });
+  } catch (error) {
+    if (isMissingSearchIndexError(error)) {
+      return { dense: { current: false }, indexes: "missing" };
+    }
+
+    throw error;
+  }
+}
+
+async function isSearchIndexDatabaseCurrent(
+  database: Database,
+): Promise<boolean> {
+  if (await hasDirtySearchIndexChapters(database)) {
+    return false;
+  }
+
+  return (await readSearchIndexFingerprintFromDatabase(database)) !== undefined;
+}
+
 export async function hasDirtySearchIndexChapters(
   database: Database,
 ): Promise<boolean> {
@@ -79,6 +134,46 @@ async function hasTable(database: Database, table: string): Promise<boolean> {
   );
 
   return row === 1;
+}
+
+async function countRows(database: Database, table: string): Promise<number> {
+  if (!(await hasTable(database, table))) {
+    return 0;
+  }
+
+  return (
+    (await database.queryOne(
+      `SELECT COUNT(*) AS count FROM ${table}`,
+      undefined,
+      (row) => getNumber(row, "count"),
+    )) ?? 0
+  );
+}
+
+async function readStateValue(
+  database: Database,
+  key: string,
+): Promise<string | undefined> {
+  return await database.queryOne(
+    `
+      SELECT value
+      FROM search_index_state
+      WHERE key = ?
+    `,
+    [key],
+    (row) => String(row.value),
+  );
+}
+
+function parseOptionalPositiveInteger(
+  value: string | undefined,
+): number | undefined {
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  const parsed = Number(value);
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 export async function assertSearchIndexNotDirty(

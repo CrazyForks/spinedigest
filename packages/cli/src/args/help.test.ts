@@ -339,7 +339,7 @@ describe("cli/args/help", () => {
     expect(rootHelpText).toContain("Reading Graph: attention chunks");
     expect(rootHelpText).toContain("Summaries: compressed reading outputs");
     expect(rootHelpText).toContain("Source text: original chapter content");
-    expect(rootHelpText).toContain("retrieved efficiently with keywords");
+    expect(rootHelpText).toContain("retrieved through the search index");
     expect(rootHelpText).toContain("Scope: a URI target");
     expect(rootHelpText).toContain("Object: a URI target");
     expect(rootHelpText).toContain("Predicate: an operation bound to a URI");
@@ -372,8 +372,9 @@ describe("cli/args/help", () => {
     );
     expect(renderHelpTopicText("config")).toContain("Configuration");
     expect(renderHelpTopicText("readiness")).toContain(
-      "Archive FTS readiness:",
+      "Archive index readiness:",
     );
+    expect(renderHelpTopicText("readiness")).toContain("Embeddings readiness:");
     expect(renderHelpTopicText("readiness")).toContain(
       "Library index readiness:",
     );
@@ -670,6 +671,9 @@ describe("cli/args/help", () => {
     expect(uriHelpText).not.toContain("wg ls");
     expect(renderHelpTopicText("config")).toContain("wikg://local/config/llm");
     expect(renderHelpTopicText("config")).toContain(
+      "wikg://local/config/embeddings",
+    );
+    expect(renderHelpTopicText("config")).toContain(
       "wikg://local/config/concurrent",
     );
     expect(renderHelpTopicText("config")).toContain("One-run overrides");
@@ -726,6 +730,13 @@ describe("cli/args/help", () => {
         "wikg://local/config/concurrent",
       ),
     ).toContain("wg wikg://local/config/concurrent put <key> <value> [--json]");
+    expect(
+      renderUriPredicateHelpText(
+        "local-config-section",
+        "test",
+        "wikg://local/config/embeddings",
+      ),
+    ).toContain("reports the returned vector dimensions");
   });
 
   it("renders library help through templates", () => {

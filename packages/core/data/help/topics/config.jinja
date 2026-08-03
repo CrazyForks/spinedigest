@@ -11,6 +11,12 @@ Sections:
   `wikg://local/config/llm`
     LLM provider, model, optional base URL, client name, and API key.
 
+  `wikg://local/config/embeddings`
+    Embedding provider for Dense search index vectors and Dense query vectors:
+      - `provider`: `openai` or `openai-compatible`.
+      - `model`: embedding model name.
+      - `dimensions`: optional positive integer when the provider/model supports dimension control.
+
   `wikg://local/config/concurrent`
     Local concurrency settings:
       - `job`: simultaneous generation jobs. Default: 3.
@@ -25,17 +31,21 @@ Sections:
 Operations:
   Read a section:
     {{ commandName }} wikg://local/config/llm
+    {{ commandName }} wikg://local/config/embeddings
     {{ commandName }} wikg://local/config/concurrent
     {{ commandName }} wikg://local/config/wikispine
 
   Replace a section with a JSON object:
     {{ commandName }} wikg://local/config/llm set '{"provider":"openai","model":"gpt-4.1"}'
+    {{ commandName }} wikg://local/config/embeddings set '{"provider":"openai","model":"text-embedding-3-small"}'
     {{ commandName }} wikg://local/config/concurrent set '{"job":3,"request":6}'
     {{ commandName }} wikg://local/config/wikispine set '{"provider":"fetch"}'
 
   Update one key:
     {{ commandName }} wikg://local/config/llm put provider openai
     {{ commandName }} wikg://local/config/llm put model gpt-4.1
+    {{ commandName }} wikg://local/config/embeddings put provider openai
+    {{ commandName }} wikg://local/config/embeddings put model text-embedding-3-small
     {{ commandName }} wikg://local/config/concurrent put job 3
     {{ commandName }} wikg://local/config/concurrent put request 6
     {{ commandName }} wikg://local/config/wikispine put provider cli
@@ -43,6 +53,7 @@ Operations:
 
   Store the API key:
     {{ commandName }} wikg://local/config/llm put apiKey --secret
+    {{ commandName }} wikg://local/config/embeddings put apiKey --secret
 
 Secret handling:
   - `apiKey` is read through an interactive hidden prompt.
@@ -56,6 +67,18 @@ Minimum LLM-backed operation configuration:
   - `llm.model`
   - Provider credentials when required by the selected provider.
 
+Minimum Dense embedding configuration:
+  - `embeddings.provider`
+  - `embeddings.model`
+  - `embeddings.baseURL` when using `openai-compatible`
+  - Provider credentials when required by the selected provider.
+
+Dense search notes:
+  - FTS indexing does not use this section.
+  - `--indexes dense` and `--indexes fts,dense` require this section.
+  - `--indexes auto` builds Dense only when this section is configured.
+  - Query uses this section when the current index includes Dense. If Dense query embedding fails, Hybrid query can still fall back to FTS.
+
 One-run overrides:
   `--llm <json>` can provide an LLM object for one invocation.
   It accepts direct LLM objects and common OpenAI-compatible aliases such as `baseUrl`.
@@ -68,6 +91,10 @@ Examples:
   {{ commandName }} wikg://local/config/llm put model gpt-4.1
   {{ commandName }} wikg://local/config/llm put apiKey --secret
   {{ commandName }} wikg://local/config/llm test
+  {{ commandName }} wikg://local/config/embeddings put provider openai
+  {{ commandName }} wikg://local/config/embeddings put model text-embedding-3-small
+  {{ commandName }} wikg://local/config/embeddings put apiKey --secret
+  {{ commandName }} wikg://local/config/embeddings test
   {{ commandName }} wikg://local/config/wikispine put provider fetch
   {{ commandName }} wikg://local/config/wikispine test
 
