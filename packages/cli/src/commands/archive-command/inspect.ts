@@ -2,8 +2,8 @@ import {
   formatWikiGraphCommandUri,
   isArchiveSearchIndexCurrent,
   listChapters,
-  readArchiveIndexSettings,
   type ChapterEntry,
+  type IndexArtifactCoverageRecord,
   type ReadonlyDocument,
 } from "wiki-graph-core";
 
@@ -70,13 +70,16 @@ interface InspectReport {
     readonly querySupport: boolean;
     readonly resource?: string;
     readonly status: "current" | "missing-or-outdated";
-    readonly storage: "archive" | "cache";
   };
   readonly coverage: {
+    readonly ftsIndexArtifact: InspectCoverage;
     readonly knowledgeGraph: InspectCoverage;
     readonly readingGraph: InspectCoverage;
     readonly summary: InspectCoverage;
+    readonly summaryEmbeddingIndexArtifact: InspectCoverage;
+    readonly sourceEmbeddingIndexArtifact: InspectCoverage;
   };
+  readonly queryBlockedChapters: readonly number[];
   readonly retrievalGuidance: readonly string[];
   readonly improvements: readonly InspectImprovement[];
   readonly performanceHints: readonly GenerationPerformanceHint[];
@@ -108,14 +111,23 @@ async function createArchiveInspectReport(
     args.chapterId === undefined
       ? archiveUri
       : `${archiveUri}/chapter/${args.chapterId}`;
-  const [chapters, summaryWords, ftsCurrent, indexSettings, config] =
-    await Promise.all([
-      readInspectChapters(document, args.chapterId),
-      readSummaryWords(document, args.chapterId),
-      isArchiveSearchIndexCurrent(document),
-      readArchiveIndexSettings(document),
-      loadCLIConfig(),
-    ]);
+  const [
+    chapters,
+    summaryWords,
+    ftsCurrent,
+    config,
+    ftsArtifactCoverage,
+    sourceEmbeddingArtifactCoverage,
+    summaryEmbeddingArtifactCoverage,
+  ] = await Promise.all([
+    readInspectChapters(document, args.chapterId),
+    readSummaryWords(document, args.chapterId),
+    isArchiveSearchIndexCurrent(document),
+    loadCLIConfig(),
+    readIndexArtifactCoverage(document, "fts", args.chapterId),
+    readIndexArtifactCoverage(document, "embedding-source", args.chapterId),
+    readIndexArtifactCoverage(document, "embedding-summary", args.chapterId),
+  ]);
   const concurrent = {
     job: config.concurrent?.job ?? DEFAULT_GENERATION_JOB_CONCURRENCY,
     request:
@@ -135,6 +147,25 @@ async function createArchiveInspectReport(
   const summaryCovered = contentChapters.filter(
     (chapter) => chapter.summaryReady,
   );
+  const ftsArtifactCovered = filterChaptersByCurrentIndexArtifact(
+    contentChapters,
+    ftsArtifactCoverage,
+  );
+  const sourceEmbeddingArtifactCovered = filterChaptersByCurrentIndexArtifact(
+    contentChapters,
+    sourceEmbeddingArtifactCoverage,
+  );
+  const summaryEmbeddingArtifactCovered = filterChaptersByCurrentIndexArtifact(
+    contentChapters,
+    summaryEmbeddingArtifactCoverage,
+  );
+  const queryBlockedChapters = contentChapters
+    .filter(
+      (chapter) =>
+        !ftsArtifactCovered.includes(chapter) &&
+        !sourceEmbeddingArtifactCovered.includes(chapter),
+    )
+    .map((chapter) => chapter.chapterId);
   const improvements = createInspectImprovements({
     archiveUri,
     concurrent,
@@ -177,23 +208,35 @@ async function createArchiveInspectReport(
       ...(ftsCurrent
         ? {}
         : {
-            fixCommand: formatCliCommand([`${archiveUri}/index`, "enable"]),
+            fixCommand: formatCliCommand([`${archiveUri}/index`, "sync"]),
             impact:
-              "--query, related --query, and evidence --query are unavailable.",
-            resource: "local CPU/disk time only; no LLM tokens.",
+              "The next archive query may need to sync index cache first.",
+            resource: "local CPU/disk time only; no provider calls.",
           }),
-      querySupport: ftsCurrent,
+      querySupport: queryBlockedChapters.length === 0,
       status: ftsCurrent ? "current" : "missing-or-outdated",
-      storage: indexSettings.ftsEmbedded ? "archive" : "cache",
     },
     coverage: {
+      ftsIndexArtifact: createInspectCoverage(
+        ftsArtifactCovered,
+        contentChapters,
+      ),
       knowledgeGraph: createInspectCoverage(
         knowledgeGraphCovered,
         contentChapters,
       ),
       readingGraph: createInspectCoverage(readingGraphCovered, contentChapters),
       summary: createInspectCoverage(summaryCovered, contentChapters),
+      sourceEmbeddingIndexArtifact: createInspectCoverage(
+        sourceEmbeddingArtifactCovered,
+        contentChapters,
+      ),
+      summaryEmbeddingIndexArtifact: createInspectCoverage(
+        summaryEmbeddingArtifactCovered,
+        contentChapters,
+      ),
     },
+    queryBlockedChapters,
     retrievalGuidance: formatRetrievalGuidance({
       ftsCurrent,
       knowledgeGraphCovered,
@@ -228,9 +271,8 @@ function formatArchiveInspectText(report: InspectReport): string {
       `Source words: ${report.content.sourceWords}`,
       `Summary words: ${report.content.summaryWords}`,
       "",
-      "FTS Index",
+      "Index Cache",
       `Status: ${report.index.current ? "current" : "missing or outdated"}`,
-      `Storage: ${report.index.storage === "archive" ? "embedded in archive" : "local cache"}`,
       `Query support: ${report.index.querySupport ? "available" : "unavailable"}`,
       ...(report.index.current
         ? []
@@ -241,9 +283,26 @@ function formatArchiveInspectText(report: InspectReport): string {
           ]),
       "",
       "Coverage",
+      formatCoverageLine(
+        "FTS Index Artifact",
+        report.coverage.ftsIndexArtifact,
+      ),
+      formatCoverageLine(
+        "Source Embedding Index Artifact",
+        report.coverage.sourceEmbeddingIndexArtifact,
+      ),
+      formatCoverageLine(
+        "Summary Embedding Index Artifact",
+        report.coverage.summaryEmbeddingIndexArtifact,
+      ),
       formatCoverageLine("Reading Graph", report.coverage.readingGraph),
       formatCoverageLine("Knowledge Graph", report.coverage.knowledgeGraph),
       formatCoverageLine("Summary", report.coverage.summary),
+      ...(report.queryBlockedChapters.length === 0
+        ? []
+        : [
+            `Query blockers: chapters ${report.queryBlockedChapters.join(", ")} have neither FTS nor source embedding index artifacts.`,
+          ]),
       "",
       "Retrieval Guidance",
       ...report.retrievalGuidance,
@@ -310,6 +369,29 @@ async function readSummaryWords(
   );
 }
 
+async function readIndexArtifactCoverage(
+  document: ReadonlyDocument,
+  kind: "embedding-source" | "embedding-summary" | "fts",
+  chapterId: number | undefined,
+): Promise<readonly IndexArtifactCoverageRecord[]> {
+  const coverage = await document.indexArtifacts.listCoverage(kind);
+
+  return chapterId === undefined
+    ? coverage
+    : coverage.filter((item) => item.serialId === chapterId);
+}
+
+function filterChaptersByCurrentIndexArtifact(
+  chapters: readonly InspectChapter[],
+  coverage: readonly IndexArtifactCoverageRecord[],
+): readonly InspectChapter[] {
+  const currentChapterIds = new Set(
+    coverage.filter((item) => item.current).map((item) => item.serialId),
+  );
+
+  return chapters.filter((chapter) => currentChapterIds.has(chapter.chapterId));
+}
+
 function createInspectCoverage(
   covered: readonly InspectChapter[],
   total: readonly InspectChapter[],
@@ -349,7 +431,7 @@ function formatRetrievalGuidance(input: {
   }
 
   const lines = [
-    `Query support: ${input.ftsCurrent ? "available" : "unavailable until the searchable index is enabled"}.`,
+    `Query cache: ${input.ftsCurrent ? "current" : "missing or outdated; archive query can sync it from artifacts"}.`,
   ];
 
   lines.push(
@@ -408,10 +490,10 @@ function createInspectImprovements(input: {
 
   if (!input.ftsCurrent) {
     improvements.push({
-      command: formatCliCommand([`${input.archiveUri}/index`, "enable"]),
+      command: formatCliCommand([`${input.archiveUri}/index`, "sync"]),
       recommendation:
-        "Enable the searchable FTS index so --query filtering is available for scopes, related results, and evidence.",
-      title: "Enable searchable index",
+        "Sync the index cache from chapter index artifacts so query starts without a lazy cache rebuild.",
+      title: "Sync index cache",
     });
   }
 

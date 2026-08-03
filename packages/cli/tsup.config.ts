@@ -53,7 +53,7 @@ export default defineConfig([
     },
     bundle: true,
     clean: true,
-    dts: true,
+    dts: false,
     entry: {
       index: "src/index.ts",
     },
@@ -72,7 +72,7 @@ export default defineConfig([
       js: ESM_DATA_DIR_BANNER,
     },
     bundle: true,
-    dts: true,
+    dts: false,
     entry: {
       cli: "src/bin/cli.ts",
       "gc-worker": "src/bin/gc-worker.ts",

@@ -42,6 +42,7 @@ export type UriHelpTargetName =
   | "chapter-title-object"
   | "chapter-tree-object"
   | "chapter-state-object"
+  | "chapter-index-artifact"
   | "chunk-scope"
   | "chunk-object"
   | "cover-object"
@@ -62,17 +63,14 @@ export type UriHelpTargetName =
 export type UriHelpPredicateName =
   | "add"
   | "boost"
+  | "build"
   | "cancel"
   | "clear"
   | "clean"
   | "create"
   | "delete"
-  | "disable"
-  | "embed"
-  | "enable"
   | "evidence"
   | "export"
-  | "external"
   | "inspect"
   | "move"
   | "pack"
@@ -83,10 +81,11 @@ export type UriHelpPredicateName =
   | "reset"
   | "resume"
   | "set"
+  | "sync"
   | "test"
   | "watch";
 
-export type LibraryHelpPredicateName = CLILibraryAction | "disable" | "enable";
+export type LibraryHelpPredicateName = CLILibraryAction | "clean" | "sync";
 
 interface UriHelpTarget {
   readonly name: UriHelpTargetName;
@@ -113,6 +112,7 @@ const URI_HELP_TARGETS: readonly UriHelpTarget[] = [
   { name: "chapter-title-object", predicates: ["clear", "set"] },
   { name: "chapter-tree-object", predicates: ["set"] },
   { name: "chapter-state-object", predicates: [] },
+  { name: "chapter-index-artifact", predicates: ["build", "delete"] },
   { name: "chunk-scope", predicates: [] },
   { name: "chunk-object", predicates: ["evidence", "pack", "related"] },
   { name: "cover-object", predicates: [] },
@@ -124,7 +124,7 @@ const URI_HELP_TARGETS: readonly UriHelpTarget[] = [
   { name: "entity-wikipage-object", predicates: [] },
   {
     name: "index-object",
-    predicates: ["enable", "disable", "embed", "external"],
+    predicates: ["clean", "sync"],
   },
   {
     name: "job-collection-scope",

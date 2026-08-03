@@ -106,41 +106,36 @@ Usage:
   {{ commandName }} {{ uri }} [--json]
 
 Notes:
-  - The status tells whether the library index is current, dirty, missing, or disabled.
+  - The status tells whether the library index cache is current, dirty, or missing.
   - Library-wide object `--query` and object scope enumeration require a current library index.
-  - Run `enable` when the status says the index needs to be built or rebuilt.
-{% elif target.kind == "scope" and target.objectUri == "wikg://index" and predicate == "enable" %}
+  - Run `sync` when the status says the index cache needs to be built or rebuilt.
+{% elif target.kind == "scope" and target.objectUri == "wikg://index" and predicate == "sync" %}
 Purpose:
-  Build or rebuild this library's aggregate search index.
+  Sync this library's aggregate index cache.
 
 Usage:
-  {{ commandName }} {{ uri }} enable [--indexes auto|fts|dense|fts,dense] [--jsonl]
+  {{ commandName }} {{ uri }} sync [--jsonl]
 
 Notes:
-  - This is a full rebuild from registered present archives.
-  - `--indexes auto` builds FTS and builds Dense when embeddings are configured.
-  - `--indexes fts` builds only FTS and does not call an embeddings provider.
-  - `--indexes dense` builds only Dense semantic segments.
-  - `--indexes fts,dense` requires embeddings and fails if Dense cannot be built.
-  - Dense indexing requires `wikg://local/config/embeddings`; test it before expensive rebuilds.
+  - This rebuilds cache from chapter index artifacts already stored in registered present archives.
+  - It does not build missing artifacts and does not call an embeddings provider.
   - Missing or unreadable library archive members are skipped and reported.
   - Progress is emitted as text by default, or line-delimited events with `--jsonl`.
-  - `--json` is not supported for enable because progress is streamed.
+  - `--json` is not supported for sync because progress is streamed.
   - Library indexes are local derived state under Wiki Graph staging, not files inside the library folder.
-  - Rebuild holds the library write lock; concurrent `arc scan`, `arc add`, `path set`, `disable`, archive `path set`, or archive `remove` commands for the same library cannot run at the same time.
-  - Archive writes can mark the aggregate index dirty; rebuild again before relying on library-wide query when status reports dirty or stale.
-{% elif target.kind == "scope" and target.objectUri == "wikg://index" and predicate == "disable" %}
+  - Sync holds the library write lock; concurrent `arc scan`, `arc add`, `path set`, `clean`, archive `path set`, or archive `remove` commands for the same library cannot run at the same time.
+{% elif target.kind == "scope" and target.objectUri == "wikg://index" and predicate == "clean" %}
 Purpose:
-  Disable this library index and remove its current local materialization.
+  Remove this library index cache.
 
 Usage:
-  {{ commandName }} {{ uri }} disable [--json]
+  {{ commandName }} {{ uri }} clean [--json]
 
 Notes:
   - This does not delete the library registry, metadata, folder, or managed `.wikg` archives.
-  - Library-wide object `--query` and object scope enumeration will fail until the index is enabled again.
-  - Library indexes do not support archive-style `embed` or `external` modes.
-  - Disable holds the library write lock and cannot run concurrently with membership changes or index rebuild for the same library.
+  - It deletes only local derived cache under Wiki Graph staging.
+  - Library-wide object `--query` and object scope enumeration will fail until the index cache is synced again.
+  - Clean holds the library write lock and cannot run concurrently with membership changes or index sync for the same library.
 {% elif target.kind == "scope" and predicate == "add" %}
 Purpose:
   Copy a `.wikg` archive into this library folder and register it as a managed archive member.
@@ -154,7 +149,7 @@ Notes:
   - `--to` must be a relative `.wikg` path inside the library folder.
   - Parent directories for `--to` are created as needed.
   - Existing target files are not overwritten.
-  - Adding an archive marks the library index dirty.
+  - Adding an archive can make an existing library index cache stale.
   - The command holds the library write lock and cannot run concurrently with `arc scan`, library `path set`, archive path changes/removes, or index rebuild for the same library.
 {% elif target.kind == "scope" and predicate == "scan" %}
 Purpose:
@@ -167,7 +162,7 @@ Notes:
   - Scan recursively discovers `.wikg` files in the bound library folder.
   - Registered files that are no longer present remain visible as missing/stale instead of being deleted silently.
   - When a moved archive can be matched by its stable mutation token, scan preserves its archive id and updates the relative path.
-  - Scan marks the library index dirty when membership changes.
+  - Scan can make an existing library index cache stale when membership changes.
   - Scan holds the library write lock and cannot run concurrently with membership changes or index rebuild for the same library.
 {% elif target.kind == "scope" and predicate == "get" %}
 Purpose:
@@ -225,7 +220,7 @@ Notes:
   - `--confirm` is required.
   - If the registered file is already missing, the command can still clean the registry entry.
   - This does not delete empty parent directories.
-  - Removing an archive marks the library index dirty.
+  - Removing an archive can make an existing library index cache stale.
   - Remove holds the library write lock and cannot run concurrently with library scan, add, path binding, archive path changes, or index rebuild for the same library.
 {% elif target.kind == "metadata" and predicate == "set" %}
 Purpose:

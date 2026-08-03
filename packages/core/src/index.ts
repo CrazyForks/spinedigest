@@ -79,7 +79,7 @@ export {
   resolveWikiGraphLibrary,
   resolveWikiGraphLibraryStagingDirectoryPath,
   scanWikiGraphLibrary,
-  disableWikiGraphLibraryIndex,
+  cleanWikiGraphLibraryIndex,
   markWikiGraphLibraryIndexDirty,
 } from "./library/index.js";
 export type {
@@ -224,7 +224,12 @@ export {
 export type { Database, Document, ReadonlyDocument } from "./document/index.js";
 export { TOC_FILE_VERSION } from "./text/source/index.js";
 export type { BookMeta } from "./text/source/index.js";
-export { isArchiveSearchIndexCurrent } from "./retrieval/query/index.js";
+export {
+  assertArchiveIndexArtifactsReady,
+  buildArchiveIndexProjection,
+  isArchiveSearchIndexCurrent,
+  writeArchiveIndexProjectionFromArtifacts,
+} from "./retrieval/query/index.js";
 export {
   ensureWikiGraphArchiveSchemaCurrent,
   ensureWikiGraphHomeSchemaCurrent,
@@ -239,15 +244,31 @@ export {
   type WikiGraphLibraryUpgradeResult,
   type WikiGraphMaintenanceUpgradeResult,
 } from "./maintenance/upgrade.js";
+export { readSearchIndexCapabilityStatus } from "./retrieval/search-index/index.js";
 export {
-  readArchiveIndexSettings,
-  readSearchIndexCapabilityStatus,
-} from "./retrieval/search-index/index.js";
+  buildChapterEmbeddingIndexArtifact,
+  buildChapterFtsIndexArtifact,
+  createEmbeddingIndexArtifactInput,
+  createFtsIndexArtifactInput,
+  refreshChapterFtsIndexArtifactIfPresent,
+  replaceChapterFtsIndexArtifact,
+  replaceChapterSourceEmbeddingIndexArtifact,
+  replaceChapterSummaryEmbeddingIndexArtifact,
+} from "./retrieval/index-artifact/index.js";
 export type {
   SearchIndexBuildOptions,
   SearchIndexEmbeddingProvider,
   SearchIndexSelection,
 } from "./retrieval/search-index/index.js";
+export type {
+  IndexArtifactCoverageRecord,
+  IndexArtifactEmbeddingSegment,
+  IndexArtifactKind,
+  IndexArtifactLexicalRow,
+  IndexArtifactRecord,
+  SentenceRecord,
+} from "./document/index.js";
+export type { EmbeddingIndexArtifactKind } from "./retrieval/index-artifact/index.js";
 export { migrateLegacySdpubToWikg } from "./storage/migration/legacy-sdpub/upgrade/index.js";
 export type {
   GuaranteedRequest,
@@ -308,7 +329,6 @@ export type {
   QueryIndexScope,
   QueryScope,
 } from "./api/index.js";
-export { setFtsIndexEmbedded } from "./retrieval/search-index/index.js";
 export {
   addBuildJob,
   assertBuildJobInputRevision,

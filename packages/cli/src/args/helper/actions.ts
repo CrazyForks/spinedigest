@@ -51,6 +51,7 @@ export function isArchiveUriAction(
   value: string | undefined,
 ): value is CLIArchiveUriAction {
   return (
+    value === "build" ||
     isArchiveAction(value) ||
     isArchiveChapterAction(value) ||
     isArchiveIndexAction(value) ||
@@ -61,13 +62,7 @@ export function isArchiveUriAction(
 export function isArchiveIndexAction(
   value: string | undefined,
 ): value is CLIArchiveIndexAction {
-  return (
-    value === "disable" ||
-    value === "embed" ||
-    value === "enable" ||
-    value === "external" ||
-    value === "get"
-  );
+  return value === "clean" || value === "get" || value === "sync";
 }
 
 export function isMetadataAction(
@@ -122,6 +117,12 @@ export function parseBuildJobTarget(value: string | undefined): BuildJobTarget {
     case undefined:
     case "reading-summary":
       return "reading-summary";
+    case "index-fts":
+      return "index-fts";
+    case "index-embedding-source":
+      return "index-embedding-source";
+    case "index-embedding-summary":
+      return "index-embedding-summary";
     case "reading-graph":
       return "reading-graph";
     case "knowledge-graph":
@@ -129,7 +130,7 @@ export function parseBuildJobTarget(value: string | undefined): BuildJobTarget {
     default:
       throw new Error(
         withHelpRoute(
-          `Invalid queue task: ${value}. Expected reading-graph, reading-summary, or knowledge-graph.`,
+          `Invalid queue task: ${value}. Expected index-fts, index-embedding-source, index-embedding-summary, reading-graph, reading-summary, or knowledge-graph.`,
           "wg wikg://local/job add --help",
         ),
       );

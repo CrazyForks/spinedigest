@@ -170,6 +170,16 @@ Default behavior:
 
 Use when:
   - You need to know whether source, Reading Graph, Reading Summary, or Knowledge Graph data exists for a chapter.
+{% elif target.name == "chapter-index-artifact" %}
+URI type:
+  Chapter index artifact object
+
+Default behavior:
+  - `{{ commandName }} {{ uri }}` reads this chapter index artifact status and summary.
+
+Use when:
+  - You need to build or delete one chapter-level index artifact stored in the `.wikg` archive.
+  - Use `/index/fts` for lexical retrieval, `/index/embedding/source` for Dense source retrieval, or `/index/embedding/summary` for Dense summary retrieval.
 {% elif target.name == "chunk-object" %}
 URI type:
   Chunk object
@@ -217,14 +227,14 @@ Use when:
   - You need to redirect or pipe the cover resource.
 {% elif target.name == "index-object" %}
 URI type:
-  Index object
+  Index cache object
 
 Default behavior:
-  - `{{ commandName }} {{ uri }}` reads archive index status, readiness, storage policy, and materialization state.
-  - Use this page when `inspect`, `--query`, `related`, or `evidence` reports missing, stale, or unavailable index support.
+  - `{{ commandName }} {{ uri }}` reads index cache status and capabilities.
+  - Chapter-level `/index/...` URIs manage index artifacts. Archive and library `/index` URIs manage derived cache.
 
 Use when:
-  - You need to inspect currentness, enable, disable, embed, or externalize searchable index support.
+  - You need to inspect, sync, or clean query cache materialization.
 {% elif target.name == "job-collection-scope" %}
 URI type:
   Local job collection scope
@@ -281,7 +291,7 @@ Default behavior:
 Use when:
   - You need to read, replace, edit, clear, or test local configuration.
 {% if "/embeddings" in uri %}
-  - This section is used by Dense search index builds and Dense query embeddings.
+  - This section is used by Dense embedding artifact builds and Dense query embeddings.
 {% endif %}
 {% if "/wikispine" in uri %}
 
@@ -361,10 +371,16 @@ Predicate commands:
 {% endif %}
 {% elif predicate == "boost" %}
   - boost: move a waiting job forward. Help: {{ commandName }} {{ uri }} boost --help
+{% elif predicate == "build" %}
+  - build: build or replace this chapter index artifact. Help: {{ commandName }} {{ uri }} build --help
 {% elif predicate == "cancel" %}
   - cancel: cancel a local job. Help: {{ commandName }} {{ uri }} cancel --help
 {% elif predicate == "clean" %}
+{% if target.name == "index-object" %}
+  - clean: remove derived index cache materialization. Help: {{ commandName }} {{ uri }} clean --help
+{% else %}
   - clean: remove completed local jobs. Help: {{ commandName }} {{ uri }} clean --help
+{% endif %}
 {% elif predicate == "clear" %}
 {% if target.name == "metadata-object" %}
   - clear: clear this metadata map. Help: {{ commandName }} {{ uri }} clear --help
@@ -374,23 +390,19 @@ Predicate commands:
 {% elif predicate == "create" %}
   - create: create the archive; use `--replace` only when discarding an existing archive. Help: {{ commandName }} {{ uri }} create --help
 {% elif predicate == "delete" %}
-{% if target.name == "metadata-object" %}
+{% if target.name == "chapter-index-artifact" %}
+  - delete: delete this chapter index artifact. Help: {{ commandName }} {{ uri }} delete --help
+{% elif target.name == "metadata-object" %}
   - delete: delete one metadata key. Help: {{ commandName }} {{ uri }} delete --help
 {% else %}
   - delete: delete a config key. Help: {{ commandName }} {{ uri }} delete --help
 {% endif %}
-{% elif predicate == "disable" %}
-  - disable: disable searchable index support and remove index materialization. Help: {{ commandName }} {{ uri }} disable --help
-{% elif predicate == "embed" %}
-  - embed: use archive-embedded searchable index storage. Help: {{ commandName }} {{ uri }} embed --help
-{% elif predicate == "enable" %}
-  - enable: enable searchable index support and bring it to current. Help: {{ commandName }} {{ uri }} enable --help
 {% elif predicate == "evidence" %}
   - evidence: trace this object to source-backed evidence; supports `--reverse` without `--query`. Help: {{ commandName }} {{ uri }} evidence --help
 {% elif predicate == "export" %}
   - export: export an archive projection. Help: {{ commandName }} {{ uri }} export --help
-{% elif predicate == "external" %}
-  - external: use local-cache searchable index storage. Help: {{ commandName }} {{ uri }} external --help
+{% elif predicate == "sync" %}
+  - sync: rebuild derived index cache from chapter index artifacts. Help: {{ commandName }} {{ uri }} sync --help
 {% elif predicate == "inspect" %}
   - inspect: inspect archive readiness. Help: {{ commandName }} {{ uri }} inspect --help
 {% elif predicate == "move" %}

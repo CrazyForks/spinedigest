@@ -379,22 +379,25 @@ describe("cli/args/help", () => {
       "Library index readiness:",
     );
     expect(renderHelpTopicText("readiness")).toContain(
-      "Without a current index",
+      "Ordinary archive source query needs chapter index artifacts",
     );
     expect(renderHelpTopicText("readiness")).toContain(
-      "`wg <archive-uri>/index enable` enables the searchable index as local cache outside the `.wikg` archive",
+      "Summary embedding alone does not satisfy ordinary archive source query readiness",
     );
     expect(renderHelpTopicText("readiness")).toContain(
-      "CLI archive writes keep it synchronized automatically",
+      "`wg <archive-uri>/index sync` builds or repairs local `index.db` cache from artifacts",
     );
     expect(renderHelpTopicText("readiness")).toContain(
-      "wg <archive-uri>/index enable --help",
+      "Free archive query can lazy-sync the cache on first use",
     );
     expect(renderHelpTopicText("readiness")).toContain(
-      "wg <archive-uri>/index embed --help",
+      "wg <archive-uri>/index sync --help",
     );
     expect(renderHelpTopicText("readiness")).toContain(
-      "wg wikg://lib/index enable --help",
+      "wg <archive-uri>/index clean --help",
+    );
+    expect(renderHelpTopicText("readiness")).toContain(
+      "wg wikg://lib/index sync --help",
     );
     expect(renderHelpTopicText("readiness")).toContain("LLM readiness:");
     expect(renderHelpTopicText("readiness")).toContain("WikiSpine readiness:");
@@ -529,22 +532,22 @@ describe("cli/args/help", () => {
     );
     expect(
       renderUriHelpText("index-object", "wikg://book.wikg/index"),
-    ).toContain("status, readiness, storage policy, and materialization state");
+    ).toContain("reads index cache status and capabilities");
     expect(
-      renderUriPredicateHelpText("index-object", "enable", "wikg://lib/index"),
-    ).toContain("Build or rebuild this library's aggregate search index");
+      renderUriPredicateHelpText("index-object", "sync", "wikg://lib/index"),
+    ).toContain("Sync this library index cache");
     expect(
-      renderUriPredicateHelpText("index-object", "enable", "wikg://lib/index"),
+      renderUriPredicateHelpText("index-object", "sync", "wikg://lib/index"),
     ).not.toContain(
       "Use `embed` when the index should travel with the archive",
     );
     expect(
       renderUriPredicateHelpText(
         "index-object",
-        "external",
+        "clean",
         "wikg://book.wikg/index",
       ),
-    ).toContain("does not guarantee a current local materialization");
+    ).toContain("Delete this index cache");
     expect(
       renderUriHelpText("local-config-namespace", "wikg://local/config"),
     ).toContain("Local config namespace");
@@ -688,6 +691,27 @@ describe("cli/args/help", () => {
         "wikg://local/job",
       ),
     ).toContain("does not update `wikg://local/config/llm`");
+    expect(
+      renderUriPredicateHelpText(
+        "job-collection-scope",
+        "add",
+        "wikg://local/job",
+      ),
+    ).toContain("index-fts|index-embedding-source|index-embedding-summary");
+    expect(
+      renderUriPredicateHelpText(
+        "job-collection-scope",
+        "add",
+        "wikg://local/job",
+      ),
+    ).toContain("wikg://local/config/embeddings");
+    expect(
+      renderUriPredicateHelpText(
+        "job-collection-scope",
+        "add",
+        "wikg://local/job",
+      ),
+    ).toContain("require a current FTS artifact");
     expect(renderHelpTopicText("runtime")).toContain("Local state map:");
     expect(renderHelpTopicText("runtime")).toContain(
       "~/.wikigraph/cache/continuation-cursors.sqlite",
@@ -820,14 +844,14 @@ describe("cli/args/help", () => {
       renderLibraryPredicateHelpText(
         "wikg://lib/index",
         { isDefault: true, kind: "scope", objectUri: "wikg://index" },
-        "enable",
+        "sync",
       ),
-    ).toContain("Rebuild holds the library write lock");
+    ).toContain("Sync holds the library write lock");
     expect(
       renderLibraryPredicateHelpText(
         "wikg://lib/index",
         { isDefault: true, kind: "scope", objectUri: "wikg://index" },
-        "enable",
+        "sync",
       ),
     ).toContain("wg help readiness");
     expect(

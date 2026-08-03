@@ -140,7 +140,53 @@ const archiveMockState = vi.hoisted(() => ({
     },
   ],
   ftsCurrent: false,
-  ftsEmbedded: false,
+  indexArtifactCoverage: {
+    "embedding-source": [
+      {
+        current: false,
+        kind: "embedding-source",
+        serialId: 1,
+        serialRevision: 0,
+      },
+      {
+        current: true,
+        kind: "embedding-source",
+        serialId: 2,
+        serialRevision: 0,
+        sourceRevision: 0,
+      },
+    ],
+    "embedding-summary": [
+      {
+        current: true,
+        kind: "embedding-summary",
+        serialId: 1,
+        serialRevision: 0,
+        sourceRevision: 0,
+      },
+      {
+        current: false,
+        kind: "embedding-summary",
+        serialId: 2,
+        serialRevision: 0,
+      },
+    ],
+    fts: [
+      {
+        current: true,
+        kind: "fts",
+        serialId: 1,
+        serialRevision: 0,
+        sourceRevision: 0,
+      },
+      {
+        current: false,
+        kind: "fts",
+        serialId: 2,
+        serialRevision: 0,
+      },
+    ],
+  },
   inspectChapters: [
     {
       chapterId: 1,
@@ -470,11 +516,36 @@ vi.mock("wiki-graph-core", async (importOriginal) => {
 
   return {
     ...actual,
+    isArchiveSearchIndexCurrent: vi.fn(() =>
+      Promise.resolve(archiveMockState.ftsCurrent),
+    ),
+    rebuildArchiveSearchIndex: vi.fn(() => Promise.resolve()),
     resolveWikiGraphLibraryArchivePath: vi.fn((uri: string) => {
       const archiveId = uri.split("/").at(-1) ?? "archive";
 
       return Promise.resolve(`/tmp/library/${archiveId}.wikg`);
     }),
+    WikiGraphArchiveFile: class {
+      readonly #path: string;
+
+      public constructor(path: string) {
+        this.#path = path;
+      }
+
+      public async readDocument(
+        operation: (document: unknown) => Promise<unknown>,
+      ): Promise<unknown> {
+        archiveMockState.readCalls.push(this.#path);
+        return await operation(createArchiveMockDocument());
+      }
+
+      public async write(
+        operation: (document: unknown) => Promise<unknown>,
+      ): Promise<unknown> {
+        archiveMockState.writeCalls.push(this.#path);
+        return await operation(createArchiveMockDocument());
+      }
+    },
   };
 });
 
@@ -592,12 +663,6 @@ vi.mock("../../../packages/core/src/api/index.js", () => ({
   ),
 }));
 
-vi.mock("../../../packages/core/src/retrieval/search-index/index.js", () => ({
-  readArchiveIndexSettings: vi.fn(() =>
-    Promise.resolve({ ftsEmbedded: archiveMockState.ftsEmbedded }),
-  ),
-}));
-
 vi.mock("../../../packages/core/src/retrieval/query/index.js", () => ({
   isArchiveSearchIndexCurrent: vi.fn(() =>
     Promise.resolve(archiveMockState.ftsCurrent),
@@ -670,6 +735,13 @@ function createArchiveMockDocument(): unknown {
           Promise.resolve(archiveMockState.serials.get(chapterId)),
       },
     },
+    indexArtifacts: {
+      value: {
+        listCoverage: (
+          kind: "embedding-source" | "embedding-summary" | "fts",
+        ) => Promise.resolve(archiveMockState.indexArtifactCoverage[kind]),
+      },
+    },
   });
 
   return document;
@@ -724,7 +796,53 @@ function createDefaultInspectSerials(): typeof archiveMockState.serials {
 export function resetArchiveMockState(): void {
   vi.clearAllMocks();
   archiveMockState.ftsCurrent = false;
-  archiveMockState.ftsEmbedded = false;
+  archiveMockState.indexArtifactCoverage = {
+    "embedding-source": [
+      {
+        current: false,
+        kind: "embedding-source",
+        serialId: 1,
+        serialRevision: 0,
+      },
+      {
+        current: true,
+        kind: "embedding-source",
+        serialId: 2,
+        serialRevision: 0,
+        sourceRevision: 0,
+      },
+    ],
+    "embedding-summary": [
+      {
+        current: true,
+        kind: "embedding-summary",
+        serialId: 1,
+        serialRevision: 0,
+        sourceRevision: 0,
+      },
+      {
+        current: false,
+        kind: "embedding-summary",
+        serialId: 2,
+        serialRevision: 0,
+      },
+    ],
+    fts: [
+      {
+        current: true,
+        kind: "fts",
+        serialId: 1,
+        serialRevision: 0,
+        sourceRevision: 0,
+      },
+      {
+        current: false,
+        kind: "fts",
+        serialId: 2,
+        serialRevision: 0,
+      },
+    ],
+  };
   archiveMockState.inspectChapters = createDefaultInspectChapters();
   archiveMockState.readCalls.length = 0;
   archiveMockState.serials = createDefaultInspectSerials();

@@ -79,8 +79,27 @@ function createQueueAddEstimateSteps(input: {
   readonly target: BuildJobTarget;
 }): readonly QueueAddEstimateStep[] {
   switch (input.target) {
+    case "index-fts":
+    case "index-embedding-source":
+    case "index-embedding-summary":
+      return [
+        createQueueAddEstimateStep({
+          chapters: input.chapters,
+          concurrent: input.concurrent,
+          model: input.model,
+          prerequisite: false,
+          task: input.target,
+        }),
+      ].filter((step) => step.chapters > 0);
     case "knowledge-graph":
       return [
+        createQueueAddEstimateStep({
+          chapters: input.chapters,
+          concurrent: input.concurrent,
+          model: input.model,
+          prerequisite: true,
+          task: "index-fts",
+        }),
         createQueueAddEstimateStep({
           chapters: input.chapters,
           concurrent: input.concurrent,
@@ -91,6 +110,15 @@ function createQueueAddEstimateSteps(input: {
       ].filter((step) => step.chapters > 0);
     case "reading-graph":
       return [
+        createQueueAddEstimateStep({
+          chapters: input.chapters.filter(
+            (chapter) => chapter.stage === "sourced",
+          ),
+          concurrent: input.concurrent,
+          model: input.model,
+          prerequisite: true,
+          task: "index-fts",
+        }),
         createQueueAddEstimateStep({
           chapters: input.chapters.filter(
             (chapter) => chapter.stage === "sourced",

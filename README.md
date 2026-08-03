@@ -55,10 +55,11 @@ $ wg wikg://quickstart.wikg/chapter/tree
 └─ Second note  wikg://chapter/second-note
 ```
 
-Enable and build the FTS index. Full-text `--query` search is available after this step:
+Build FTS index artifacts, then sync the local index cache. Full-text `--query` search is available after this step:
 
 ```bash
-$ wg wikg://quickstart.wikg/index enable
+$ wg wikg://local/job add --input wikg://quickstart.wikg --task index-fts --accept-cost
+$ wg wikg://quickstart.wikg/index sync
 ```
 
 Search the content:
@@ -100,7 +101,7 @@ What Wiki Graph aims to do is sediment the public knowledge in long text that ca
 
 ### `.wikg`
 
-`.wikg` is the archive file Wiki Graph uses to create, maintain, and share a knowledge base. It can store source text, a chapter tree, Knowledge Graphs, Reading Graphs, summaries, index policy, and metadata, while organizing knowledge base content through hierarchical chapters.
+`.wikg` is the archive file Wiki Graph uses to create, maintain, and share a knowledge base. It can store source text, a chapter tree, Knowledge Graphs, Reading Graphs, summaries, index artifacts, and metadata, while organizing knowledge base content through hierarchical chapters.
 
 In the LLM Wiki framing, a knowledge base often resembles a person's second brain: private, continuously growing, and mixed with many personal schemas. `.wikg` is a portable complement to that direction. It gives a knowledge base a clear scope, so it can be organized and delivered like a book, a website, a course, or a set of meeting records.
 

@@ -21,17 +21,18 @@ import {
   listRelatedArchiveObjects,
   readArchiveText,
   readArchivePage,
-  rebuildArchiveSearchIndex,
+  rebuildArchiveSearchIndex as rebuildArchiveSearchIndexCore,
 } from "../../../../../packages/core/src/retrieval/query/view.js";
 import { streamArchiveIndexProjection } from "../../../../../packages/core/src/retrieval/query/archive-view/index-state.js";
 import {
   isSearchIndexCurrent,
   markDirtySearchIndexChapters,
   querySearchIndex,
-  readArchiveIndexSettings,
   SEARCH_INDEX_FTS_HIT_LIMIT,
 } from "../../../../../packages/core/src/retrieval/search-index/index.js";
+import { replaceChapterFtsIndexArtifact } from "../../../../../packages/core/src/retrieval/index-artifact/index.js";
 import { deleteArchiveSearchSessions } from "../../../../../packages/core/src/retrieval/query/search-cache/index.js";
+import type { TocItem } from "../../../../../packages/core/src/text/source/index.js";
 import { withTempDir } from "../../../../helpers/temp.js";
 
 const originalStateDir = getWikiGraphStateDirectoryPathForTesting();
@@ -65,14 +66,22 @@ export {
   markDirtySearchIndexChapters,
   packArchiveContext,
   querySearchIndex,
-  readArchiveIndexSettings,
+  replaceChapterFtsIndexArtifact,
   readArchivePage,
   readArchiveText,
-  rebuildArchiveSearchIndex,
   SEARCH_INDEX_FTS_HIT_LIMIT,
   streamArchiveIndexProjection,
   withTempDir,
 };
+
+export async function rebuildArchiveSearchIndex(
+  document: DirectoryDocument,
+): Promise<void> {
+  for (const serialId of listTocSerialIdsForTest(await document.readToc())) {
+    await replaceChapterFtsIndexArtifact(document, serialId);
+  }
+  await rebuildArchiveSearchIndexCore(document);
+}
 
 export async function seedSourcedDocument(
   document: DirectoryDocument,
@@ -155,7 +164,29 @@ export async function seedSourcedDocument(
       version: 1,
     });
   });
+  await replaceChapterFtsIndexArtifact(document, 1);
   await rebuildArchiveSearchIndex(document);
+}
+
+function listTocSerialIdsForTest(
+  toc:
+    | {
+        readonly items: readonly TocItem[];
+      }
+    | undefined,
+): readonly number[] {
+  if (toc === undefined) {
+    return [];
+  }
+
+  return toc.items.flatMap(listTocItemSerialIdsForTest);
+}
+
+function listTocItemSerialIdsForTest(item: TocItem): readonly number[] {
+  return [
+    ...(item.serialId === undefined ? [] : [item.serialId]),
+    ...item.children.flatMap(listTocItemSerialIdsForTest),
+  ];
 }
 
 export function restoreWikiGraphStateDir(value: string | undefined): void {

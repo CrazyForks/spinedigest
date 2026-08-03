@@ -14,6 +14,7 @@ import {
   ChunkStore,
   FragmentGroupStore,
   GraphBuildParameterStore,
+  IndexArtifactStore,
   ReadingEdgeStore,
   MentionLinkStore,
   MentionStore,
@@ -54,6 +55,7 @@ export class DirectoryDocument implements Document {
   public readonly chunks: ChunkStore;
   public readonly fragmentGroups: FragmentGroupStore;
   public readonly graphBuildParameters: GraphBuildParameterStore;
+  public readonly indexArtifacts: IndexArtifactStore;
   public readonly readingEdges: ReadingEdgeStore;
   public readonly mentionLinks: MentionLinkStore;
   public readonly mentions: MentionStore;
@@ -81,6 +83,7 @@ export class DirectoryDocument implements Document {
     this.chunks = new ChunkStore(database);
     this.fragmentGroups = new FragmentGroupStore(database);
     this.graphBuildParameters = new GraphBuildParameterStore(database);
+    this.indexArtifacts = new IndexArtifactStore(database);
     this.readingEdges = new ReadingEdgeStore(database);
     this.mentionLinks = new MentionLinkStore(database);
     this.mentions = new MentionStore(database);
@@ -194,6 +197,7 @@ export class DirectoryDocument implements Document {
 
   public async clearSerialSource(serialId: number): Promise<void> {
     await this.clearSerialGraph(serialId);
+    await this.indexArtifacts.deleteBySerial(serialId);
     await this.#textStreams.getSerial(serialId).delete();
     await this.serials.bumpRevision(serialId);
   }
@@ -203,6 +207,8 @@ export class DirectoryDocument implements Document {
   }
 
   public async deleteSummary(serialId: number): Promise<void> {
+    await this.indexArtifacts.delete(serialId, "fts");
+    await this.indexArtifacts.delete(serialId, "embedding-summary");
     await this.#textStreams.getSummarySerial(serialId).delete();
   }
 
@@ -437,6 +443,7 @@ export class DirectoryDocument implements Document {
   }
 
   async #deleteSerialResources(serialId: number): Promise<void> {
+    await this.indexArtifacts.deleteBySerial(serialId);
     await deleteSerialResources({
       database: this.#database,
       deleteSummary: async (targetSerialId) => {

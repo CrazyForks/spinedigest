@@ -4,8 +4,8 @@ import type {
   ArchiveTriplePattern,
   BuildJobTarget,
   ChapterStage,
+  IndexArtifactKind,
   ParsedWikiGraphLibraryUri,
-  SearchIndexSelection,
 } from "wiki-graph-core";
 
 export interface CLIArguments {
@@ -52,6 +52,9 @@ export interface ArchiveMetaPatch {
 
 export type CLIArchiveChapterAction =
   | "add"
+  | "build-index-artifact"
+  | "delete-index-artifact"
+  | "get-index-artifact"
   | "list"
   | "move"
   | "remove"
@@ -75,6 +78,8 @@ export interface CLIArchiveChapterArguments {
   readonly first?: boolean;
   readonly inputPath?: string;
   readonly inputValue?: string;
+  readonly indexArtifactKind?: IndexArtifactKind;
+  readonly indexArtifactTarget?: BuildJobTarget;
   readonly json?: boolean;
   readonly last?: boolean;
   readonly llmJSON?: string;
@@ -107,10 +112,9 @@ export type CLILibraryAction =
   | "add"
   | "archive-tree"
   | "clear"
+  | "clean-index"
   | "create"
   | "delete"
-  | "disable-index"
-  | "enable-index"
   | "get"
   | "get-index"
   | "list"
@@ -118,7 +122,8 @@ export type CLILibraryAction =
   | "rebind"
   | "remove"
   | "scan"
-  | "set";
+  | "set"
+  | "sync-index";
 
 export interface CLILibraryArguments {
   readonly action: CLILibraryAction;
@@ -128,7 +133,6 @@ export interface CLILibraryArguments {
   readonly inputValue?: string | undefined;
   readonly json?: boolean | undefined;
   readonly jsonl?: boolean | undefined;
-  readonly indexes?: SearchIndexSelection | undefined;
   readonly jsonInputValue?: string | undefined;
   readonly key?: string | undefined;
   readonly path?: string | undefined;
@@ -230,16 +234,12 @@ export type CLIArchiveAction =
   | "search";
 
 export type CLIArchiveMaintenanceCommand = "chapter" | "cover" | "meta";
-export type CLIArchiveIndexAction =
-  | "disable"
-  | "embed"
-  | "enable"
-  | "external"
-  | "get";
+export type CLIArchiveIndexAction = "clean" | "get" | "sync";
 export type CLIArchiveRootAction = CLIArchiveAction;
 export type CLIArchiveUriAction =
   | CLIArchiveRootAction
   | CLIArchiveChapterAction
+  | "build"
   | CLIArchiveIndexAction
   | CLIMetadataAction;
 export type CLIJobAction =
@@ -295,7 +295,6 @@ export interface CLIArchiveArguments {
 export interface CLIArchiveIndexArguments {
   readonly action: CLIArchiveIndexAction;
   readonly archivePath: string;
-  readonly indexes?: SearchIndexSelection;
   readonly json?: boolean;
   readonly jsonl?: boolean;
 }

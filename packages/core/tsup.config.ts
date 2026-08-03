@@ -29,7 +29,7 @@ export default defineConfig([
     },
     bundle: true,
     clean: true,
-    dts: true,
+    dts: false,
     entry: ENTRY,
     format: ["cjs"],
     outExtension() {
@@ -41,7 +41,9 @@ export default defineConfig([
   {
     ...SHARED_OPTIONS,
     bundle: false,
-    dts: true,
+    dts: {
+      entry: ENTRY,
+    },
     entry: ["src/**/*.ts", "!src/**/*.test.ts"],
     format: ["esm"],
   },
