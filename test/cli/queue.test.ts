@@ -155,6 +155,16 @@ function createQueueMockDocument() {
     },
     readSummary: () =>
       Promise.resolve(queueMockState.hasSummary ? "Summary text." : undefined),
+    readToc: () =>
+      Promise.resolve({
+        items: [
+          {
+            children: [],
+            serialId: 12,
+            title: "Chapter title",
+          },
+        ],
+      }),
     serials: {
       getById: () =>
         Promise.resolve(queueMockState.serialExists ? { id: 12 } : undefined),
@@ -324,7 +334,7 @@ vi.mock("../../packages/core/src/api/index.js", () => ({
     queueMockState.resolveJobIds.push(jobId);
     return Promise.resolve(jobId === "job-1-short" ? "job-1-full" : jobId);
   }),
-  resumeBuildJob: vi.fn(),
+  resumeBuildJob: vi.fn(() => Promise.resolve(queueMockState.job)),
   runBuildJobWorker: vi.fn(
     (options: typeof queueMockState.runWorkerOptions) => {
       queueMockState.runWorkerOptions = {
@@ -577,6 +587,9 @@ describe("cli/queue", () => {
     ]);
     expect(queueMockState.loadRequiredStageConfigCalls).toStrictEqual([{}]);
     expect(queueMockState.textWrites.join("")).toContain("Job job-1 queued");
+    expect(queueMockState.textWrites.join("")).toContain(
+      "Job is queued; the requested artifact or generated data is not ready until the job succeeds.",
+    );
     expect(queueMockState.textWrites.join("")).toContain("Estimate:");
     expect(queueMockState.textWrites.join("")).toContain(
       "Work: reading-graph over 1 chapter / 800 words",
@@ -612,6 +625,8 @@ describe("cli/queue", () => {
         words: 800,
       },
       jobId: "job-1",
+      notice:
+        "Job is queued; the requested artifact or generated data is not ready until the job succeeds.",
       state: "queued",
       target: "reading-summary",
       watchCommand: "wg wikg://local/job/job-1 watch",
@@ -910,6 +925,24 @@ describe("cli/queue", () => {
     });
   });
 
+  it("prints queued resume as resumable work", async () => {
+    queueMockState.job = {
+      ...queueMockState.job,
+      state: "queued",
+    };
+
+    await runQueueCommand({
+      action: "resume",
+      jobId: "job-1-short",
+    });
+
+    expect(queueMockState.resolveJobIds).toStrictEqual(["job-1-short"]);
+    expect(queueMockState.textWrites.join("")).toContain("Job job-1 queued");
+    expect(queueMockState.textWrites.join("")).toContain(
+      "Job is queued; the requested artifact or generated data is not ready until the job succeeds.",
+    );
+  });
+
   it("runs LLM build work outside archive write scopes", async () => {
     queueMockState.job = {
       ...queueMockState.job,
@@ -1046,6 +1079,10 @@ describe("cli/queue", () => {
       ).artifact.lexicalRows,
     ).toMatchObject([
       {
+        rowId: "chapter-title:12",
+        text: "Chapter title",
+      },
+      {
         rowId: "source-sentence:0",
         text: "Alpha beta.",
       },
@@ -1137,6 +1174,55 @@ describe("cli/queue", () => {
         ownerId: "owner-1",
       },
     ]);
+  });
+
+  it("runs summary embedding index artifact jobs through JSONL output", async () => {
+    queueMockState.cliConfig = {
+      embedding: {
+        model: "test-embedding",
+        provider: "openai-compatible",
+      },
+    };
+    queueMockState.job = {
+      ...queueMockState.job,
+      state: "running",
+      target: "index-embedding-summary",
+    };
+
+    await runQueueWorker();
+
+    const reporter = {
+      addOutputCharacters: vi.fn(() => Promise.resolve()),
+      setTotals: vi.fn(() => Promise.resolve()),
+      stepCompleted: vi.fn(() => Promise.resolve()),
+      stepStarted: vi.fn(() => Promise.resolve()),
+      updatePhase: vi.fn(() => Promise.resolve()),
+      updateWords: vi.fn(() => Promise.resolve()),
+    };
+
+    await queueMockState.runWorkerOptions!.executeJob(
+      queueMockState.job,
+      reporter,
+      { signal: new AbortController().signal },
+    );
+
+    expect(queueMockState.serialFragmentsSentenceListCalls).toBe(0);
+    expect(queueMockState.summaryFragmentsSentenceListCalls).toBe(1);
+    expect(queueMockState.embeddingRequests).toStrictEqual([["Summary text."]]);
+    expect(queueMockState.indexArtifactWrites[0]).toMatchObject({
+      artifact: {
+        kind: "embedding-summary",
+        segments: [
+          {
+            text: "Summary text.",
+            vector: [1, 2, 3],
+          },
+        ],
+        serialId: 12,
+        sourceRevision: 1,
+      },
+      kind: "embedding",
+    });
   });
 
   it("rejects embedding index artifact jobs when the chapter is gone", async () => {

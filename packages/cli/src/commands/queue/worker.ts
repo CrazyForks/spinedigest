@@ -8,10 +8,11 @@ import {
   commitChapterKnowledgeGraphArtifact,
   commitChapterSummaryArtifact,
   createEmbeddingIndexArtifactInput,
+  createFtsIndexArtifactInput,
   createDisambiguationProfileNormalizer,
   generateChapterKnowledgeGraphArtifactFromSnapshot,
   getBuildJob,
-  replaceChapterFtsIndexArtifact,
+  readIndexArtifactOutput,
   readChapterBuildInput,
   recordBuildJobInputRevision,
   runBuildJobWorker,
@@ -20,7 +21,9 @@ import {
   type BuildJob,
   type BuildJobExecutionContext,
   type BuildJobProgressReporter,
+  type IndexArtifactOutput,
   type SentenceRecord,
+  writeIndexArtifactOutput,
 } from "wiki-graph-core";
 import { WikiGraphArchiveFile } from "wiki-graph-core";
 import type {
@@ -29,6 +32,7 @@ import type {
   ReadonlyDocument,
 } from "wiki-graph-core";
 import type { LLMessage } from "wiki-graph-core";
+import { join } from "path";
 
 import { loadCLIConfig, type CLIConfig } from "../../runtime/config.js";
 import {
@@ -40,6 +44,37 @@ import {
 } from "../../runtime/index.js";
 import { buildSearchIndexEmbeddingProvider } from "../../runtime/embedding.js";
 import { CLI_HELP_ROUTES, withHelpRoute } from "../../support/index.js";
+
+interface IndexArtifactJobChunkSnapshot {
+  readonly content: string;
+  readonly id: number;
+  readonly label: string;
+  readonly wordsCount: number;
+}
+
+interface IndexArtifactJobMentionSnapshot {
+  readonly id: string;
+  readonly qid: string;
+  readonly surface: string;
+}
+
+interface IndexArtifactJobTocItemSnapshot {
+  readonly children: readonly IndexArtifactJobTocItemSnapshot[];
+  readonly serialId?: number | undefined;
+  readonly title?: string | null | undefined;
+}
+
+interface IndexArtifactJobSnapshot {
+  readonly chapterTitles: readonly {
+    readonly id: number;
+    readonly title: string;
+  }[];
+  readonly chunks: readonly IndexArtifactJobChunkSnapshot[];
+  readonly mentions: readonly IndexArtifactJobMentionSnapshot[];
+  readonly revision: number;
+  readonly sentences: readonly SentenceRecord[];
+  readonly summarySentences: readonly SentenceRecord[];
+}
 
 export async function runQueueWorker(): Promise<void> {
   const config = await loadCLIConfig();
@@ -352,11 +387,30 @@ async function executeIndexArtifactBuildJob(
   });
 
   if (job.target === "index-fts") {
+    const outputPath = resolveIndexArtifactOutputPath(job);
+    await writeIndexArtifactOutput(
+      outputPath,
+      createFtsIndexArtifactInput({
+        chapterTitles: snapshot.chapterTitles,
+        chunks: snapshot.chunks,
+        mentions: snapshot.mentions,
+        sentences: snapshot.sentences,
+        serialId: job.chapterId,
+        sourceRevision: snapshot.revision,
+        summarySentences: snapshot.summarySentences,
+      }),
+    );
+    const artifact = await readIndexArtifactOutput(outputPath);
+
+    assertIndexArtifactOutputMatchesJob(job, snapshot.revision, artifact);
+    if (!("lexicalRows" in artifact)) {
+      throw new Error("Index artifact output is not an FTS artifact.");
+    }
     await new WikiGraphArchiveFile(job.archivePath).write(async (document) => {
       assertJobStillRunning(await getBuildJob(job.jobId));
       await assertJobChapterExists(document, job.chapterId);
       await assertCurrentBuildInputRevision(job, document);
-      await replaceChapterFtsIndexArtifact(document, job.chapterId);
+      await document.indexArtifacts.replaceFts(artifact);
     });
     await completeIndexArtifactStep(job, reporter);
     return;
@@ -371,6 +425,7 @@ async function executeIndexArtifactBuildJob(
       ),
     );
   }
+  const outputPath = resolveIndexArtifactOutputPath(job);
   const artifact = await createEmbeddingIndexArtifactInput({
     embeddingProvider: buildSearchIndexEmbeddingProvider(config.embedding),
     kind:
@@ -382,12 +437,19 @@ async function executeIndexArtifactBuildJob(
     signal: context.signal,
     sourceRevision: snapshot.revision,
   });
+  await writeIndexArtifactOutput(outputPath, artifact);
+  const output = await readIndexArtifactOutput(outputPath);
+
+  assertIndexArtifactOutputMatchesJob(job, snapshot.revision, output);
+  if ("lexicalRows" in output) {
+    throw new Error("Index artifact output is not an embedding artifact.");
+  }
 
   await new WikiGraphArchiveFile(job.archivePath).write(async (document) => {
     assertJobStillRunning(await getBuildJob(job.jobId));
     await assertJobChapterExists(document, job.chapterId);
     await assertCurrentBuildInputRevision(job, document);
-    await document.indexArtifacts.replaceEmbedding(artifact);
+    await document.indexArtifacts.replaceEmbedding(output);
   });
   await completeIndexArtifactStep(job, reporter);
 }
@@ -406,17 +468,13 @@ async function completeIndexArtifactStep(
   assertJobStillRunning(await getBuildJob(job.jobId));
 }
 
-async function readIndexArtifactJobSnapshot(job: BuildJob): Promise<{
-  readonly revision: number;
-  readonly sentences: readonly SentenceRecord[];
-}> {
+async function readIndexArtifactJobSnapshot(
+  job: BuildJob,
+): Promise<IndexArtifactJobSnapshot> {
   return await new WikiGraphArchiveFile(job.archivePath).readDocument(
     async (document) => {
       await assertJobChapterExists(document, job.chapterId);
       const revision = await document.serials.getRevision(job.chapterId);
-      if (job.target === "index-fts") {
-        return { revision, sentences: [] };
-      }
       const stream =
         job.target === "index-embedding-summary"
           ? document.getSummaryFragments(job.chapterId)
@@ -434,11 +492,114 @@ async function readIndexArtifactJobSnapshot(job: BuildJob): Promise<{
         throw new Error("Text stream does not expose sentence listing.");
       }
 
+      const sentences = await stream.listSentences();
+      if (job.target !== "index-fts") {
+        return {
+          chapterTitles: [],
+          chunks: [],
+          mentions: [],
+          revision,
+          sentences,
+          summarySentences: [],
+        };
+      }
+
       return {
+        chapterTitles: await readChapterTitles(document, job.chapterId),
+        chunks: await document.chunks.listBySerial(job.chapterId),
+        mentions: await document.mentions.listByChapter(job.chapterId),
         revision,
-        sentences: await stream.listSentences(),
+        sentences,
+        summarySentences: await listTextStreamSentences(
+          document.getSummaryFragments(job.chapterId),
+        ),
       };
     },
+  );
+}
+
+async function listTextStreamSentences(stream: {
+  readonly listSentences?: () => Promise<readonly SentenceRecord[]>;
+}): Promise<readonly SentenceRecord[]> {
+  if (stream.listSentences === undefined) {
+    throw new Error("Text stream does not expose sentence listing.");
+  }
+
+  return await stream.listSentences();
+}
+
+async function readChapterTitles(
+  document: ReadonlyDocument,
+  serialId: number,
+): Promise<readonly { readonly id: number; readonly title: string }[]> {
+  const reader = document as ReadonlyDocument & {
+    readonly readToc?: () => Promise<
+      { readonly items: readonly IndexArtifactJobTocItemSnapshot[] } | undefined
+    >;
+  };
+  const toc = await reader.readToc?.();
+  if (toc === undefined) {
+    return [];
+  }
+
+  const chapter = collectTocItems(toc.items).find(
+    (item) => item.serialId === serialId,
+  );
+  if (chapter === undefined || typeof chapter.title !== "string") {
+    return [];
+  }
+
+  return [{ id: serialId, title: chapter.title }];
+}
+
+function collectTocItems(
+  items: readonly IndexArtifactJobTocItemSnapshot[],
+): readonly IndexArtifactJobTocItemSnapshot[] {
+  return items.flatMap((item) => [item, ...collectTocItems(item.children)]);
+}
+
+function resolveIndexArtifactOutputPath(job: BuildJob): string {
+  return join(job.workspacePath, "index-artifact-output.jsonl");
+}
+
+function assertIndexArtifactOutputMatchesJob(
+  job: BuildJob,
+  inputRevision: number,
+  artifact: IndexArtifactOutput,
+): void {
+  if (artifact.serialId !== job.chapterId) {
+    throw new Error(
+      `Index artifact output targets chapter ${artifact.serialId}, expected chapter ${job.chapterId}.`,
+    );
+  }
+  if (artifact.sourceRevision !== inputRevision) {
+    throw new Error(
+      `Index artifact output targets input revision ${artifact.sourceRevision}, expected revision ${inputRevision}.`,
+    );
+  }
+
+  if (job.target === "index-fts") {
+    if ("lexicalRows" in artifact) {
+      return;
+    }
+
+    throw new Error("Index artifact output is not an FTS artifact.");
+  }
+  if ("lexicalRows" in artifact) {
+    throw new Error("Index artifact output is not an embedding artifact.");
+  }
+
+  const expectedKind =
+    job.target === "index-embedding-source"
+      ? "embedding-source"
+      : "embedding-summary";
+
+  if (artifact.kind === expectedKind) {
+    return;
+  }
+
+  throw new Error(
+    `Index artifact output kind ${artifact.kind} does not match ${job.target}.`,
   );
 }
 

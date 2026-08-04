@@ -34,6 +34,9 @@ export function createCursorPayload(input: ContinuationCursor): object {
           ? {}
           : { evidenceLimit: input.evidenceLimit }),
         ...(input.query === undefined ? {} : { query: input.query }),
+        ...(input.skipUnindexed === undefined
+          ? {}
+          : { skipUnindexed: input.skipUnindexed }),
         ...(input.sourceContext === undefined
           ? {}
           : { sourceContext: input.sourceContext }),
@@ -48,6 +51,9 @@ export function createCursorPayload(input: ContinuationCursor): object {
         cursor: input.cursor,
         order: input.order,
         ...(input.query === undefined ? {} : { query: input.query }),
+        ...(input.skipUnindexed === undefined
+          ? {}
+          : { skipUnindexed: input.skipUnindexed }),
         ...(input.sourceContext === undefined
           ? {}
           : { sourceContext: input.sourceContext }),
@@ -63,6 +69,9 @@ export function createCursorPayload(input: ContinuationCursor): object {
         order: input.order,
         ...(input.query === undefined ? {} : { query: input.query }),
         ...(input.role === undefined ? {} : { role: input.role }),
+        ...(input.skipUnindexed === undefined
+          ? {}
+          : { skipUnindexed: input.skipUnindexed }),
         ...(input.sourceContext === undefined
           ? {}
           : { sourceContext: input.sourceContext }),
@@ -113,6 +122,7 @@ export function parseContinuationCursorRecord(record: {
       indexScope,
       kind: "search",
       ...getPayloadOptionalString(payload, "query"),
+      ...getPayloadOptionalBoolean(payload, "skipUnindexed"),
       ...getPayloadOptionalInteger(payload, "sourceContext", "sourceContext"),
       ...getPayloadOptionalTriplePattern(payload),
       types: getPayloadStringArrayOrNull(payload, "types"),
@@ -129,6 +139,7 @@ export function parseContinuationCursorRecord(record: {
       kind: "evidence",
       order: getPayloadOrder(payload),
       ...getPayloadOptionalString(payload, "query"),
+      ...getPayloadOptionalBoolean(payload, "skipUnindexed"),
       ...getPayloadOptionalInteger(payload, "sourceContext", "sourceContext"),
       targetUri: getPayloadString(payload, "targetUri"),
     };
@@ -146,6 +157,7 @@ export function parseContinuationCursorRecord(record: {
       order: getPayloadOrder(payload),
       ...getPayloadOptionalString(payload, "query"),
       ...getPayloadOptionalRelatedRole(payload),
+      ...getPayloadOptionalBoolean(payload, "skipUnindexed"),
       ...getPayloadOptionalInteger(payload, "sourceContext", "sourceContext"),
       targetUri: getPayloadString(payload, "targetUri"),
     };
@@ -322,17 +334,17 @@ function getPayloadOptionalInteger<K extends string>(
   throw new Error("Invalid continuation cursor payload.");
 }
 
-function getPayloadOptionalBoolean(
+function getPayloadOptionalBoolean<Key extends string>(
   payload: Readonly<Record<string, unknown>>,
-  key: string,
-): { readonly backlinks?: boolean } {
+  key: Key,
+): { readonly [Property in Key]?: boolean } {
   const value = payload[key];
 
   if (value === undefined) {
     return {};
   }
   if (typeof value === "boolean") {
-    return { backlinks: value };
+    return { [key]: value } as { readonly [Property in Key]?: boolean };
   }
 
   throw new Error("Invalid continuation cursor payload.");

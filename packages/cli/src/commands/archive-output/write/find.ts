@@ -14,6 +14,11 @@ import { writeJSONL } from "./jsonl.js";
 import { createFindObject, createObjectResultPage } from "../object/objects.js";
 import { createPageCursorObject } from "../object/page-cursor.js";
 import type { ArchiveOutputContext, ResultFormat } from "../object/types.js";
+import {
+  createOutputWarnings,
+  createWarningJSONLObject,
+  formatOutputWarnings,
+} from "./warnings.js";
 
 export async function writeFindHits(
   result: ArchiveFindResult,
@@ -27,25 +32,34 @@ export async function writeFindHits(
     context,
     result.nextCursor,
   );
+  const warnings = createOutputWarnings(context);
 
   if (format === "json") {
     await writeTextToStdout(
-      formatCLIJSON(createObjectResultPage(objects, nextCursor, result.limit)),
+      formatCLIJSON(
+        createObjectResultPage(objects, nextCursor, result.limit, warnings),
+      ),
     );
     return;
   }
   if (format === "jsonl") {
-    await writeJSONL([...objects, createPageCursorObject(nextCursor)]);
+    await writeJSONL([
+      ...warnings.map(createWarningJSONLObject),
+      ...objects,
+      createPageCursorObject(nextCursor),
+    ]);
     return;
   }
 
   if (objects.length === 0) {
-    await writeTextToStdout(formatNoMatches(result));
+    await writeTextToStdout(
+      `${formatOutputWarnings(warnings)}${formatNoMatches(result)}`,
+    );
     return;
   }
 
   await writeTextToStdout(
-    `${objects
+    `${formatOutputWarnings(warnings)}${objects
       .map((object) => formatFindObject(object))
       .join(
         getListObjectSeparator(objects),
@@ -65,7 +79,9 @@ export async function writeAllFindHits(
     const page = await readPage(cursor);
 
     if (format === "jsonl") {
-      await writeFindHitsWithoutContinuation(page, context, format);
+      await writeFindHitsWithoutContinuation(page, context, format, {
+        emitWarnings: cursor === undefined,
+      });
     } else {
       pages.push(page);
     }
@@ -89,29 +105,36 @@ export async function writeFindHitsWithoutContinuation(
   result: ArchiveFindResult,
   context: ArchiveOutputContext,
   format: ResultFormat,
+  options: { readonly emitWarnings?: boolean } = {},
 ): Promise<void> {
   const objects = await Promise.all(
     result.items.map(async (item) => await createFindObject(item, context)),
   );
+  const warnings =
+    (options.emitWarnings ?? true) ? createOutputWarnings(context) : [];
 
   if (format === "json") {
     await writeTextToStdout(
-      formatCLIJSON(createObjectResultPage(objects, null, result.limit)),
+      formatCLIJSON(
+        createObjectResultPage(objects, null, result.limit, warnings),
+      ),
     );
     return;
   }
   if (format === "jsonl") {
-    await writeJSONL(objects);
+    await writeJSONL([...warnings.map(createWarningJSONLObject), ...objects]);
     return;
   }
 
   if (objects.length === 0) {
-    await writeTextToStdout(formatNoMatches(result));
+    await writeTextToStdout(
+      `${formatOutputWarnings(warnings)}${formatNoMatches(result)}`,
+    );
     return;
   }
 
   await writeTextToStdout(
-    `${objects
+    `${formatOutputWarnings(warnings)}${objects
       .map((object) => formatFindObject(object))
       .join(getListObjectSeparator(objects))}${formatFindLensHint(result)}\n`,
   );

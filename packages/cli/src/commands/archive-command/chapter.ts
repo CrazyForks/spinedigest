@@ -35,6 +35,8 @@ import {
   writeTextToStdout,
 } from "../../support/index.js";
 import { formatCLIJSON } from "../../support/index.js";
+import { tryStartQueueWorker } from "../queue/add.js";
+import { writeJobSummary } from "../queue/output.js";
 import { readArchiveDocument, writeArchiveDocument } from "./run/document.js";
 import { resolveArchiveRuntimeLocation } from "./run/uri.js";
 
@@ -103,13 +105,8 @@ export async function runArchiveChapterCommand(
         target: requireIndexArtifactTarget(args.indexArtifactTarget),
       });
 
-      if (args.json === true) {
-        await writeTextToStdout(formatCLIJSON(job));
-        return;
-      }
-      await writeTextToStdout(
-        `Queued ${job.target} job ${job.jobId} for chapter ${job.chapterId}.\n`,
-      );
+      tryStartQueueWorker();
+      await writeJobSummary(job, { json: args.json ?? false, watch: true });
       return;
     }
     case "delete-index-artifact":

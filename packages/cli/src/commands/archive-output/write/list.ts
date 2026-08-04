@@ -12,6 +12,11 @@ import { writeJSONL } from "./jsonl.js";
 import { createListObject, createObjectResultPage } from "../object/objects.js";
 import { createPageCursorObject } from "../object/page-cursor.js";
 import type { ArchiveOutputContext, ResultFormat } from "../object/types.js";
+import {
+  createOutputWarnings,
+  createWarningJSONLObject,
+  formatOutputWarnings,
+} from "./warnings.js";
 
 export async function writeList(
   result: ArchiveRelatedResult,
@@ -25,25 +30,32 @@ export async function writeList(
     context,
     result.nextCursor,
   );
+  const warnings = createOutputWarnings(context);
 
   if (format === "json") {
     await writeTextToStdout(
-      formatCLIJSON(createObjectResultPage(objects, nextCursor, result.limit)),
+      formatCLIJSON(
+        createObjectResultPage(objects, nextCursor, result.limit, warnings),
+      ),
     );
     return;
   }
   if (format === "jsonl") {
-    await writeJSONL([...objects, createPageCursorObject(nextCursor)]);
+    await writeJSONL([
+      ...warnings.map(createWarningJSONLObject),
+      ...objects,
+      createPageCursorObject(nextCursor),
+    ]);
     return;
   }
 
   if (objects.length === 0) {
-    await writeTextToStdout("No objects.\n");
+    await writeTextToStdout(`${formatOutputWarnings(warnings)}No objects.\n`);
     return;
   }
 
   await writeTextToStdout(
-    `${objects.map(formatFindObject).join(getListObjectSeparator(objects))}${formatOpenShortUriHint(objects, context)}${formatNextCursor(nextCursor)}\n`,
+    `${formatOutputWarnings(warnings)}${objects.map(formatFindObject).join(getListObjectSeparator(objects))}${formatOpenShortUriHint(objects, context)}${formatNextCursor(nextCursor)}\n`,
   );
 }
 
@@ -60,7 +72,9 @@ export async function writeAllRelatedItems(
     const page = await readPage(cursor);
 
     if (format === "jsonl") {
-      await writeListWithoutContinuation(page, context, format);
+      await writeListWithoutContinuation(page, context, format, {
+        emitWarnings: cursor === initialCursor,
+      });
     } else {
       pages.push(page);
     }
@@ -83,29 +97,34 @@ export async function writeListWithoutContinuation(
   result: ArchiveRelatedResult,
   context: ArchiveOutputContext,
   format: ResultFormat,
+  options: { readonly emitWarnings?: boolean } = {},
 ): Promise<void> {
   const objects = await Promise.all(
     result.items.map(async (item) => await createListObject(item, context)),
   );
+  const warnings =
+    (options.emitWarnings ?? true) ? createOutputWarnings(context) : [];
 
   if (format === "json") {
     await writeTextToStdout(
-      formatCLIJSON(createObjectResultPage(objects, null, result.limit)),
+      formatCLIJSON(
+        createObjectResultPage(objects, null, result.limit, warnings),
+      ),
     );
     return;
   }
   if (format === "jsonl") {
-    await writeJSONL(objects);
+    await writeJSONL([...warnings.map(createWarningJSONLObject), ...objects]);
     return;
   }
 
   if (objects.length === 0) {
-    await writeTextToStdout("No objects.\n");
+    await writeTextToStdout(`${formatOutputWarnings(warnings)}No objects.\n`);
     return;
   }
 
   await writeTextToStdout(
-    `${objects.map(formatFindObject).join(getListObjectSeparator(objects))}\n`,
+    `${formatOutputWarnings(warnings)}${objects.map(formatFindObject).join(getListObjectSeparator(objects))}\n`,
   );
 }
 

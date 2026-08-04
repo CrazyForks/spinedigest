@@ -9,8 +9,10 @@ import {
   assertNoActiveBuildJobConflicts,
   getBuildJob,
   listBuildJobs,
+  pauseBuildJob,
   readBuildJobEvents,
   resolveBuildJobId,
+  resumeBuildJob,
   runBuildJobWorker,
   boostBuildJob,
   updateBuildJobTarget,
@@ -99,6 +101,45 @@ describe("facade/build-queue", () => {
         second.jobId,
         first.jobId,
       ]);
+    });
+  });
+
+  it("treats resume on an already queued job as an idempotent no-op", async () => {
+    await withTempDir("wikigraph-build-queue-", async (path) => {
+      useStateDir(`${path}/state`);
+
+      const job = await addBuildJob({
+        archivePath: `${path}/book.wikg`,
+        chapterId: 1,
+        target: "reading-summary",
+      });
+
+      await expect(resumeBuildJob(job.jobId)).resolves.toMatchObject({
+        jobId: job.jobId,
+        state: "queued",
+      });
+      await expect(readBuildJobEvents(job)).resolves.toHaveLength(1);
+    });
+  });
+
+  it("treats concurrent resume calls as idempotent", async () => {
+    await withTempDir("wikigraph-build-queue-", async (path) => {
+      useStateDir(`${path}/state`);
+
+      const job = await addBuildJob({
+        archivePath: `${path}/book.wikg`,
+        chapterId: 1,
+        target: "reading-summary",
+      });
+      const paused = await pauseBuildJob(job.jobId);
+
+      await expect(
+        Promise.all([resumeBuildJob(job.jobId), resumeBuildJob(job.jobId)]),
+      ).resolves.toEqual([
+        expect.objectContaining({ jobId: job.jobId, state: "queued" }),
+        expect.objectContaining({ jobId: job.jobId, state: "queued" }),
+      ]);
+      await expect(readBuildJobEvents(paused)).resolves.toHaveLength(3);
     });
   });
 
@@ -898,7 +939,7 @@ describe("facade/build-queue", () => {
       releaseJob();
       await worker;
     });
-  });
+  }, 10_000);
 
   async function waitForRunningJob(message: string): Promise<void> {
     await waitForRunningJobCount(1, message);

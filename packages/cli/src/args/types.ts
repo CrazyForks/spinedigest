@@ -289,6 +289,7 @@ export interface CLIArchiveArguments {
   readonly replace?: boolean;
   readonly reverse?: boolean;
   readonly role?: "any" | "object" | "self" | "subject";
+  readonly skipUnindexed?: boolean;
   readonly triplePattern?: ArchiveTriplePattern;
 }
 
@@ -297,6 +298,7 @@ export interface CLIArchiveIndexArguments {
   readonly archivePath: string;
   readonly json?: boolean;
   readonly jsonl?: boolean;
+  readonly skipUnindexed?: boolean;
 }
 
 export interface ArchiveMetaFlagValues {
@@ -359,6 +361,7 @@ export interface ArchiveArgumentValues extends ArchiveMetaFlagValues {
   readonly role?: string;
   readonly root?: boolean;
   readonly secret?: boolean;
+  readonly "skip-unindexed"?: boolean;
   readonly stage?: string;
   readonly last?: boolean;
   readonly task?: string;

@@ -1,16 +1,22 @@
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, readFile, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { Writable } from "stream";
 import { describe, expect, it } from "vitest";
 
 import { DirectoryDocument } from "../../document/index.js";
 import type { SearchIndexEmbeddingProvider } from "../search-index/index.js";
 import {
   buildChapterEmbeddingIndexArtifact,
+  createEmbeddingIndexArtifactInput,
+  createFtsIndexArtifactInput,
+  readIndexArtifactOutput,
   replaceChapterFtsIndexArtifact,
   replaceChapterSourceEmbeddingIndexArtifact,
   replaceChapterSummaryEmbeddingIndexArtifact,
+  writeIndexArtifactOutput,
 } from "./index.js";
+import { writeIndexArtifactOutputToStream } from "./output.js";
 
 async function withDocument(
   operation: (document: DirectoryDocument) => Promise<void>,
@@ -153,7 +159,7 @@ describe("index artifact builders", () => {
               "One two three four five.\n" +
               "山海之间有旧城。",
             vector: [1, 2, 3],
-            wordsCount: 11,
+            wordsCount: 17,
           },
         ]);
       });
@@ -206,16 +212,162 @@ describe("index artifact builders", () => {
       });
     });
   });
+
+  it("writes commit-ready FTS index artifact JSONL outputs", async () => {
+    const path = await mkdtemp(join(tmpdir(), "wikigraph-index-output-"));
+
+    try {
+      const outputPath = join(path, "index-artifact-output.jsonl");
+      const artifact = createFtsIndexArtifactInput({
+        sentences: [{ text: "Alpha beta.", wordsCount: 2 }],
+        serialId: 12,
+        sourceRevision: 3,
+      });
+
+      await writeIndexArtifactOutput(outputPath, artifact);
+
+      const output = await readIndexArtifactOutput(outputPath);
+      const lines = (await readFile(outputPath, "utf8")).trim().split("\n");
+
+      expect(lines).toHaveLength(2);
+      expect(JSON.parse(lines[0]!)).toStrictEqual({
+        artifactKind: "fts",
+        chapterId: 12,
+        inputRevision: 3,
+        protocol: "wikg-index-output/v1",
+        type: "manifest",
+      });
+      expect(lines.join("\n")).not.toContain('"job"');
+      expect(lines.join("\n")).not.toContain('"final"');
+      expect(output).toStrictEqual({
+        lexicalRows: artifact.lexicalRows,
+        serialId: 12,
+        sourceRevision: 3,
+      });
+    } finally {
+      await rm(path, { force: true, recursive: true });
+    }
+  });
+
+  it("writes commit-ready embedding index artifact JSONL outputs", async () => {
+    const path = await mkdtemp(join(tmpdir(), "wikigraph-index-output-"));
+
+    try {
+      const outputPath = join(path, "index-artifact-output.jsonl");
+      const provider = createFakeEmbeddingProvider();
+      const artifact = await createEmbeddingIndexArtifactInput({
+        embeddingProvider: provider,
+        kind: "embedding-source",
+        sentences: [{ text: "Alpha beta.", wordsCount: 2 }],
+        serialId: 12,
+        sourceRevision: 3,
+      });
+
+      await writeIndexArtifactOutput(outputPath, artifact);
+
+      const output = await readIndexArtifactOutput(outputPath);
+      const lines = (await readFile(outputPath, "utf8")).trim().split("\n");
+
+      expect(JSON.parse(lines[0]!)).toStrictEqual({
+        artifactKind: "embedding-source",
+        chapterId: 12,
+        embedding: {
+          dimensions: 3,
+          identity: "provider=fake;model=test-embedding",
+          model: "test-embedding",
+        },
+        inputRevision: 3,
+        protocol: "wikg-index-output/v1",
+        type: "manifest",
+      });
+      expect(output).toStrictEqual(artifact);
+    } finally {
+      await rm(path, { force: true, recursive: true });
+    }
+  });
+
+  it("round-trips embedding output without provider identity", async () => {
+    const path = await mkdtemp(join(tmpdir(), "wikigraph-index-output-"));
+
+    try {
+      const outputPath = join(path, "index-artifact-output.jsonl");
+      const provider = createFakeEmbeddingProvider({ identity: undefined });
+      const artifact = await createEmbeddingIndexArtifactInput({
+        embeddingProvider: provider,
+        kind: "embedding-source",
+        sentences: [{ text: "Alpha beta.", wordsCount: 2 }],
+        serialId: 12,
+        sourceRevision: 3,
+      });
+
+      await writeIndexArtifactOutput(outputPath, artifact);
+
+      const output = await readIndexArtifactOutput(outputPath);
+      const lines = (await readFile(outputPath, "utf8")).trim().split("\n");
+
+      expect(JSON.parse(lines[0]!)).toStrictEqual({
+        artifactKind: "embedding-source",
+        chapterId: 12,
+        embedding: {
+          dimensions: 3,
+          model: "test-embedding",
+        },
+        inputRevision: 3,
+        protocol: "wikg-index-output/v1",
+        type: "manifest",
+      });
+      expect(output).toStrictEqual(artifact);
+    } finally {
+      await rm(path, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps stream errors handled after a failed output write", async () => {
+    const artifact = createFtsIndexArtifactInput({
+      sentences: [{ text: "Alpha beta.", wordsCount: 2 }],
+      serialId: 12,
+      sourceRevision: 3,
+    });
+    const stream = new CallbackThenStreamErrorWritable();
+
+    await expect(
+      writeIndexArtifactOutputToStream(stream, artifact),
+    ).rejects.toThrow("write failed");
+    await new Promise((resolve) => setImmediate(resolve));
+  });
 });
 
-function createFakeEmbeddingProvider(): SearchIndexEmbeddingProvider & {
+class CallbackThenStreamErrorWritable extends Writable {
+  readonly #error = new Error("write failed");
+
+  public override _final(callback: (error?: Error | null) => void): void {
+    setTimeout(() => callback(), 10);
+  }
+
+  public override _write(
+    _chunk: unknown,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null) => void,
+  ): void {
+    callback(this.#error);
+    setImmediate(() => {
+      this.emit("error", this.#error);
+    });
+  }
+}
+
+function createFakeEmbeddingProvider(
+  options: { readonly identity?: string | undefined } = {
+    identity: "provider=fake;model=test-embedding",
+  },
+): SearchIndexEmbeddingProvider & {
   readonly requests: string[][];
 } {
   const requests: string[][] = [];
 
   return {
     dimensions: 3,
-    identity: "provider=fake;model=test-embedding",
+    ...(options.identity === undefined ? {} : { identity: options.identity }),
     model: "test-embedding",
     requests,
     embedTexts(texts) {

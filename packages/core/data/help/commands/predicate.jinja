@@ -14,12 +14,13 @@ Purpose:
   Expand from the current chunk or entity object to nearby objects.
 
 Usage:
-  {{ commandName }} {{ uri }} related [--query <query>] [--reverse] [--all] [--limit <n>] [--context <n>] [--cursor <token>] [--role <any|subject|object|self>] [--evidence [n]] [--json|--jsonl]
+  {{ commandName }} {{ uri }} related [--query <query>] [--skip-unindexed] [--reverse] [--all] [--limit <n>] [--context <n>] [--cursor <token>] [--role <any|subject|object|self>] [--evidence [n]] [--json|--jsonl]
 
 Notes:
   - Chunk targets return nearby Reading Graph chunks.
   - Entity targets return Knowledge Graph triples involving the entity.
   - `--query` filters and ranks related results with the current search index.
+  - Add `--skip-unindexed` only with `--query` when you intentionally want to search indexed chapters and ignore uncovered chapters.
   - Without `--query`, `--reverse` reads Document Flow order backward. See `{{ commandName }} help uri`.
   - `--role` only applies to entity targets.
   - Use `{{ commandName }} {{ uri }} evidence --help` when source grounding is the main goal.
@@ -28,11 +29,12 @@ Purpose:
   Trace the current object back to source-backed evidence.
 
 Usage:
-  {{ commandName }} {{ uri }} evidence [--query <query>] [--reverse] [--all] [--limit <n>] [--context <n>] [--cursor <token>] [--json|--jsonl]
+  {{ commandName }} {{ uri }} evidence [--query <query>] [--skip-unindexed] [--reverse] [--all] [--limit <n>] [--context <n>] [--json|--jsonl]
 
 Notes:
   - Evidence is for grounding, verification, and citation support.
   - `--query` filters and ranks evidence with the current search index.
+  - Add `--skip-unindexed` only with `--query` when you intentionally want to search indexed chapters and ignore uncovered chapters.
   - Without `--query`, `--reverse` reads Document Flow order backward. See `{{ commandName }} help uri`.
   - Evidence previews include nearby source context by default; use `--context 0` for exact cited ranges.
   - Source and scope URIs are not evidence targets.
@@ -103,12 +105,14 @@ Notes:
 {% endif %}
 {% elif predicate == "build" and target.name == "chapter-index-artifact" %}
 Purpose:
-  Build or replace this chapter index artifact.
+  Queue a job to build or replace this chapter index artifact.
 
 Usage:
   {{ commandName }} {{ uri }} build [--json]
 
 Notes:
+  - This command enqueues work; it does not wait for the artifact to be built.
+  - A queued response means the artifact is not ready yet. Use the returned job id with `wg wikg://local/job/<job-id> watch` to follow progress.
   - FTS artifacts are local compilation work and do not call a provider.
   - Source and summary embedding artifacts require `wikg://local/config/embeddings` and may call the configured provider.
   - Direct artifact build is an explicit build request; it does not use `--accept-cost`.
@@ -400,12 +404,13 @@ Purpose:
   Sync this archive index cache from chapter index artifacts.
 
 Usage:
-  {{ commandName }} {{ uri }} sync [--jsonl]
+  {{ commandName }} {{ uri }} sync [--jsonl] [--skip-unindexed]
 
 Notes:
   - This initializes or repairs the local `index.db` cache outside the `.wikg` archive.
   - It reads chapter index artifacts from the archive and does not call an embeddings provider.
   - If required chapter artifacts are missing, sync reports that artifact readiness problem instead of building them.
+  - Add `--skip-unindexed` only when you intentionally want the cache to include indexed chapters and ignore uncovered chapters.
   - Free archive query can lazy-sync this cache, but explicit sync avoids the first-query delay.
   - With `--jsonl`, progress is emitted as line-delimited event records.
 {% endif %}
@@ -452,6 +457,11 @@ Purpose:
 
 Usage:
   {{ commandName }} {{ uri }} resume
+
+Notes:
+  - Paused jobs move back to queued.
+  - Queued jobs are already resumable work; `resume` leaves them queued and asks the local worker to pick up the queue.
+  - Finished, failed, canceled, and canceling jobs cannot be resumed.
 {% elif predicate == "cancel" %}
 Purpose:
   Cancel this local job.
