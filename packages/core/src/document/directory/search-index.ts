@@ -1,5 +1,5 @@
 import { stat } from "fs/promises";
-import { join } from "path";
+import { join, resolve } from "path";
 
 import { isNodeError } from "../../utils/node-error.js";
 import { Database } from "../database.js";
@@ -8,6 +8,9 @@ import {
   SEARCH_INDEX_TEXT_SENTENCE_RECORDS_COLUMNS_SQL,
 } from "../schema.js";
 import type { DocumentFileStore } from "./types.js";
+import { SEARCH_INDEX_VERSION } from "../../retrieval/search-index/search/types.js";
+
+const searchIndexLifecycleLocks = new Map<string, Promise<void>>();
 
 export async function openSearchIndexDatabase<T>(input: {
   readonly documentPath: string;
@@ -15,14 +18,43 @@ export async function openSearchIndexDatabase<T>(input: {
   readonly operation: (database: Database) => Promise<T> | T;
   readonly readonly: boolean;
 }): Promise<T> {
-  const databasePath =
+  return await withSearchIndexLifecycleLock(resolve(input.documentPath), () =>
+    openSearchIndexDatabaseLocked(input),
+  );
+}
+
+async function openSearchIndexDatabaseLocked<T>(input: {
+  readonly documentPath: string;
+  readonly fileStore: DocumentFileStore;
+  readonly operation: (database: Database) => Promise<T> | T;
+  readonly readonly: boolean;
+}): Promise<T> {
+  let databasePath =
     input.fileStore.resolveSearchIndexDatabasePath === undefined
       ? join(input.documentPath, "index.db")
       : await input.fileStore.resolveSearchIndexDatabasePath(
           input.documentPath,
         );
-  const shouldInitialize =
+  let shouldInitialize =
     !input.readonly && (await isMissingOrEmptyFile(databasePath));
+
+  if (
+    !shouldInitialize &&
+    !(await isSearchIndexDatabaseCompatible(databasePath))
+  ) {
+    await deleteSearchIndexDatabaseFile(input.fileStore, input.documentPath);
+    if (input.readonly) {
+      throw new Error("Search index cache is missing: index.db");
+    }
+    databasePath =
+      input.fileStore.resolveSearchIndexDatabasePath === undefined
+        ? join(input.documentPath, "index.db")
+        : await input.fileStore.resolveSearchIndexDatabasePath(
+            input.documentPath,
+          );
+    shouldInitialize = true;
+  }
+
   const database = await Database.open(
     databasePath,
     shouldInitialize ? SEARCH_INDEX_SCHEMA_SQL : "",
@@ -45,6 +77,30 @@ export async function openSearchIndexDatabase<T>(input: {
   }
 }
 
+async function withSearchIndexLifecycleLock<T>(
+  key: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = searchIndexLifecycleLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const lock = new Promise<void>((resolveLock) => {
+    release = resolveLock;
+  });
+  const current = previous.then(() => lock);
+  searchIndexLifecycleLocks.set(key, current);
+
+  await previous;
+
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (searchIndexLifecycleLocks.get(key) === current) {
+      searchIndexLifecycleLocks.delete(key);
+    }
+  }
+}
+
 async function isMissingOrEmptyFile(path: string): Promise<boolean> {
   const stats = await stat(path).catch((error: unknown) => {
     if (isNodeError(error) && error.code === "ENOENT") {
@@ -55,6 +111,51 @@ async function isMissingOrEmptyFile(path: string): Promise<boolean> {
   });
 
   return stats === undefined || stats.size === 0;
+}
+
+async function isSearchIndexDatabaseCompatible(
+  databasePath: string,
+): Promise<boolean> {
+  const database = await Database.open(databasePath, "", {
+    readonly: true,
+  }).catch(() => undefined);
+
+  if (database === undefined) {
+    return false;
+  }
+
+  try {
+    const version = await database
+      .queryOne(
+        `
+          SELECT value
+          FROM search_index_state
+          WHERE key = 'version'
+        `,
+        undefined,
+        (row) => String(row.value),
+      )
+      .catch(() => undefined);
+
+    return version === SEARCH_INDEX_VERSION;
+  } finally {
+    await database.close();
+  }
+}
+
+async function deleteSearchIndexDatabaseFile(
+  fileStore: DocumentFileStore,
+  documentPath: string,
+): Promise<void> {
+  try {
+    await fileStore.deleteFile(join(documentPath, "index.db"));
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return;
+    }
+
+    throw error;
+  }
 }
 
 async function migrateSearchIndexSchema(database: Database): Promise<void> {
