@@ -37,6 +37,7 @@ import {
 import {
   assertSearchCursorTypesMatch,
   createEntitySearchCacheInput,
+  createSentenceEvidenceSearchCacheInput,
 } from "./cache-input.js";
 import { findEntities, findTriples } from "../find.js";
 import {
@@ -297,7 +298,7 @@ async function populateObjectBucketCaches(
         : { embeddingProvider: options.embeddingProvider }),
       match: parseFindMatch(session.match),
       objectHitLimit: SEARCH_INDEX_FTS_HIT_LIMIT,
-      textHitLimit: 0,
+      textHitLimit: SEARCH_INDEX_FTS_HIT_LIMIT,
       types: null,
     }),
   ]);
@@ -309,11 +310,24 @@ async function populateObjectBucketCaches(
     structuredHits,
     indexed,
   );
+  const sentenceCacheInput = await createSentenceEvidenceSearchCacheInput(
+    document,
+    indexed,
+    options,
+  );
 
   await populateSearchSessionObjectCaches({
-    entityHits: entityCacheInput.entityHits,
-    evidenceEvents: entityCacheInput.evidenceEvents,
+    chunkHits: sentenceCacheInput.chunkHits,
+    entityHits: [
+      ...entityCacheInput.entityHits,
+      ...sentenceCacheInput.entityHits,
+    ],
+    evidenceEvents: [
+      ...entityCacheInput.evidenceEvents,
+      ...sentenceCacheInput.evidenceEvents,
+    ],
     sessionId: session.sessionId,
+    tripleHits: sentenceCacheInput.tripleHits,
   });
 }
 
